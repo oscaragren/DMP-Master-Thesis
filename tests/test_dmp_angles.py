@@ -39,13 +39,19 @@ def _load_angles_demo(trial_dir: Path) -> np.ndarray:
         )
 
     data = np.load(npz_path)
-    elbow_deg = data["elbow_deg"]  # (T,)
-    shoulder_deg = data["shoulder_deg"]  # (T, 3)
+    if "elbow_rad" in data and "shoulder_rad" in data:
+        elbow = data["elbow_rad"]  # (T,)
+        shoulder = data["shoulder_rad"]  # (T, 3)
+    else:
+        elbow_deg = data["elbow_deg"]
+        shoulder_deg = data["shoulder_deg"]
+        elbow = np.deg2rad(elbow_deg)
+        shoulder = np.deg2rad(shoulder_deg)
 
-    if shoulder_deg.ndim == 1:
-        shoulder_deg = shoulder_deg[:, None]
+    if shoulder.ndim == 1:
+        shoulder = shoulder[:, None]
 
-    q_demo = np.column_stack([elbow_deg, shoulder_deg])  # (T, 4)
+    q_demo = np.column_stack([elbow, shoulder])  # (T, 4), radians
 
     # Drop any time steps with invalid values (NaNs/Infs) to keep DMP stable.
     valid = np.all(np.isfinite(q_demo), axis=1)

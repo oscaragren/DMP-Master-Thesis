@@ -14,26 +14,52 @@ def limb_vectors(seq: np.ndarray) -> np.ndarray:
     S = seq[:, 0, :]
     E = seq[:, 1, :]
     W = seq[:, 2, :]
-    return S-E, E-W
+    return S - E, E - W
 
-def elbow_flexion_deg(seq: np.ndarray) -> np.ndarray:
+def _elbow_flexion_rad_core(seq: np.ndarray) -> np.ndarray:
     """
+    Core computation of elbow flexion in radians.
+
     seq: (T, 4, 3) with [shoulder, elbow, wrist, right_shoulder] in meters
-    returns: (T,) elbow angle in degrees, NaN where missing
+    returns: (T,) elbow angle in radians, NaN where missing.
     """
-
     u, v = limb_vectors(seq)
 
     # Normalize with NaN safety
     u_norm = np.linalg.norm(u, axis=1)
     v_norm = np.linalg.norm(v, axis=1)
-    valid = (u_norm > 0) & (v_norm > 0) & np.all(np.isfinite(u), axis=1) & np.all(np.isfinite(v), axis=1)
+    valid = (
+        (u_norm > 0)
+        & (v_norm > 0)
+        & np.all(np.isfinite(u), axis=1)
+        & np.all(np.isfinite(v), axis=1)
+    )
 
     out = np.full((seq.shape[0],), np.nan, dtype=np.float64)
     dot = np.einsum("ij,ij->i", u, v)
     cosang = np.clip(dot / (u_norm * v_norm), -1.0, 1.0)
-    out[valid] = np.degrees(np.arccos(cosang[valid]))
+    out[valid] = np.arccos(cosang[valid])
     return out
+
+
+def elbow_flexion_rad(seq: np.ndarray) -> np.ndarray:
+    """
+    Elbow flexion in radians.
+
+    seq: (T, 4, 3) with [shoulder, elbow, wrist, right_shoulder] in meters
+    returns: (T,) elbow angle in radians, NaN where missing.
+    """
+    return _elbow_flexion_rad_core(seq)
+
+
+def elbow_flexion_deg(seq: np.ndarray) -> np.ndarray:
+    """
+    Elbow flexion in degrees (legacy helper, derived from radians).
+
+    seq: (T, 4, 3) with [shoulder, elbow, wrist, right_shoulder] in meters
+    returns: (T,) elbow angle in degrees, NaN where missing.
+    """
+    return np.degrees(_elbow_flexion_rad_core(seq))
 
 
 def _trunk_frame_from_shoulders(
@@ -45,22 +71,22 @@ def _trunk_frame_from_shoulders(
     Returns x_axis (T,3), y_axis (T,3), z_axis (T,3) unit vectors.
     x = right_shoulder - left_shoulder (normalized), y ≈ up, z = forward.
     """
-    x = right_shoulder - left_shoulder # vector between shoulders
+    x = right_shoulder - left_shoulder  # vector between shoulders
     x_norm = np.linalg.norm(x, axis=1, keepdims=True)
     valid = (x_norm.squeeze(1) > 1e-8) & np.all(np.isfinite(x), axis=1)
     x = np.where(x_norm > 1e-8, x / x_norm, np.nan)
 
     # y = up (world) projected onto plane perpendicular to x
     up = np.broadcast_to(WORLD_UP, (x.shape[0], 3))
-    y = up - np.einsum("ij,ij->i", up, x)[:, None] * x # project up vector onto plane perpendicular to x
+    y = up - np.einsum("ij,ij->i", up, x)[:, None] * x  # project up vector onto plane perpendicular to x
     y_norm = np.linalg.norm(y, axis=1, keepdims=True)
     y = np.where(y_norm > 1e-8, y / y_norm, np.nan)
     
     # z = forward (world) projected onto plane perpendicular to x and y
-    z = np.cross(x, y) # cross product of x and y to get z axis
+    z = np.cross(x, y)  # cross product of x and y to get z axis
     z_norm = np.linalg.norm(z, axis=1, keepdims=True)
     z = np.where(z_norm > 1e-8, z / z_norm, np.nan)
-    return x, y, z # x, y, z axes of trunk frame
+    return x, y, z  # x, y, z axes of trunk frame
 
 
 def _signed_angle_around_axis(
@@ -76,25 +102,25 @@ def _signed_angle_around_axis(
     # Project into plane perpendicular to axis
     axis_norm = np.linalg.norm(axis, axis=1, keepdims=True)
     axis_u = np.where(axis_norm > 1e-8, axis / axis_norm, np.nan)
-   
-    v_ref_p = v_ref - np.einsum("ij,ij->i", v_ref, axis_u)[:, None] * axis_u # project v_ref onto plane perpendicular to axis
-    v_arm_p = v_arm - np.einsum("ij,ij->i", v_arm, axis_u)[:, None] * axis_u # project v_arm onto plane perpendicular to axis
-    
+
+    v_ref_p = v_ref - np.einsum("ij,ij->i", v_ref, axis_u)[:, None] * axis_u  # project v_ref onto plane perpendicular to axis
+    v_arm_p = v_arm - np.einsum("ij,ij->i", v_arm, axis_u)[:, None] * axis_u  # project v_arm onto plane perpendicular to axis
+
     n_ref = np.linalg.norm(v_ref_p, axis=1)
     n_arm = np.linalg.norm(v_arm_p, axis=1)
     valid = (n_ref > 1e-8) & (n_arm > 1e-8)
     
     v_ref_p = np.where(valid[:, None], v_ref_p / np.maximum(n_ref[:, None], 1e-8), np.nan)
     v_arm_p = np.where(valid[:, None], v_arm_p / np.maximum(n_arm[:, None], 1e-8), np.nan)
-   
-    dot = np.einsum("ij,ij->i", v_ref_p, v_arm_p) # dot product of v_ref_p and v_arm_p to get the cosine of the angle
-    cross = np.cross(v_ref_p, v_arm_p) # cross product of v_ref_p and v_arm_p to get the direction of the angle
-    
+
+    dot = np.einsum("ij,ij->i", v_ref_p, v_arm_p)  # dot product of v_ref_p and v_arm_p to get the cosine of the angle
+    cross = np.cross(v_ref_p, v_arm_p)  # cross product of v_ref_p and v_arm_p to get the direction of the angle
+
     sign = np.sign(np.einsum("ij,ij->i", cross, axis_u))
-    sign = np.where(sign == 0, 1, sign) # if sign is 0, set to 1
+    sign = np.where(sign == 0, 1, sign)  # if sign is 0, set to 1
     out = np.full((axis.shape[0],), np.nan, dtype=np.float64)
-    out[valid] = sign[valid] * np.arccos(np.clip(dot[valid], -1.0, 1.0)) # angle in radians
-    return out # signed angle in radians
+    out[valid] = sign[valid] * np.arccos(np.clip(dot[valid], -1.0, 1.0))  # angle in radians
+    return out  # signed angle in radians
 
 
 def shoulder_angles_3dof(seq: np.ndarray) -> np.ndarray:
@@ -111,8 +137,8 @@ def shoulder_angles_3dof(seq: np.ndarray) -> np.ndarray:
     - Internal rotation: rotation of the humerus about its long axis (elbow flex axis vs reference plane).
     """
     T = seq.shape[0]
-    ls = seq[:, 0, :]   # left shoulder
-    rs = seq[:, 3, :]   # right shoulder
+    ls = seq[:, 0, :]  # left shoulder
+    rs = seq[:, 3, :]  # right shoulder
 
     upper_arm, forearm = limb_vectors(seq)
 
@@ -130,14 +156,16 @@ def shoulder_angles_3dof(seq: np.ndarray) -> np.ndarray:
     out = np.full((T, 3), np.nan, dtype=np.float64)
 
     # Elevation: angle between upper arm and vertical (y_trunk)
-    cos_el = np.einsum("ij,ij->i", upper_arm, y_trunk) / np.maximum(np.linalg.norm(upper_arm, axis=1), 1e-8) # cosine of the angle between upper arm and vertical
-    elevation_rad = np.arccos(np.clip(cos_el, -1.0, 1.0)) # angle in radians
-    out[:, 0] = np.degrees(elevation_rad) # angle in degrees
+    cos_el = np.einsum("ij,ij->i", upper_arm, y_trunk) / np.maximum(
+        np.linalg.norm(upper_arm, axis=1), 1e-8
+    )  # cosine of the angle between upper arm and vertical
+    elevation_rad = np.arccos(np.clip(cos_el, -1.0, 1.0))  # angle in radians
+    out[:, 0] = np.degrees(elevation_rad)  # angle in degrees
 
     # Azimuth: angle of upper-arm projection in horizontal (xz) plane
     ua_xz = upper_arm - np.einsum("ij,ij->i", upper_arm, y_trunk)[:, None] * y_trunk
-    proj_x = np.einsum("ij,ij->i", ua_xz, x_trunk) # projection of upper arm onto x axis
-    proj_z = np.einsum("ij,ij->i", ua_xz, z_trunk) # projection of upper arm onto z axis
+    proj_x = np.einsum("ij,ij->i", ua_xz, x_trunk)  # projection of upper arm onto x axis
+    proj_z = np.einsum("ij,ij->i", ua_xz, z_trunk)  # projection of upper arm onto z axis
     azimuth_rad = np.arctan2(proj_z, proj_x)
     out[:, 1] = np.degrees(azimuth_rad)
 
@@ -173,8 +201,8 @@ def shoulder_flex_abd_rot_3dof(seq: np.ndarray) -> np.ndarray:
             * Same definition as in shoulder_angles_3dof — twist of the humerus about its long axis.
     """
     T = seq.shape[0]
-    ls = seq[:, 0, :]   # left shoulder
-    rs = seq[:, 3, :]   # right shoulder
+    ls = seq[:, 0, :]  # left shoulder
+    rs = seq[:, 3, :]  # right shoulder
 
     upper_arm, forearm = limb_vectors(seq)
 
@@ -215,3 +243,14 @@ def shoulder_flex_abd_rot_3dof(seq: np.ndarray) -> np.ndarray:
 
     out[~valid, :] = np.nan
     return out
+
+
+def shoulder_flex_abd_rot_3dof_rad(seq: np.ndarray) -> np.ndarray:
+    """
+    Radian version of shoulder_flex_abd_rot_3dof.
+
+    Returns:
+        (T, 3) in radians:
+            [flexion_rad, abduction_rad, internal_rotation_rad]
+    """
+    return np.deg2rad(shoulder_flex_abd_rot_3dof(seq))

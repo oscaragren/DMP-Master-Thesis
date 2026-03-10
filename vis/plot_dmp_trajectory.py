@@ -32,7 +32,7 @@ def load_angles_demo(trial_dir: Path) -> np.ndarray:
         column 1: shoulder flexion
         column 2: shoulder abduction
         column 3: shoulder internal rotation
-    All in degrees.
+    Prefer radians (elbow_rad, shoulder_rad); fall back to degrees if needed.
     """
     npz_path = trial_dir / "angles.npz"
     if not npz_path.exists():
@@ -41,11 +41,19 @@ def load_angles_demo(trial_dir: Path) -> np.ndarray:
             "Run mapping/sequence_to_angles.py or vis/plot_left_arm_angles.py first."
         )
     data = np.load(npz_path)
-    elbow_deg = data["elbow_deg"]
-    shoulder_deg = data["shoulder_deg"]
-    if shoulder_deg.ndim == 1:
-        shoulder_deg = shoulder_deg[:, None]
-    q_demo = np.column_stack([elbow_deg, shoulder_deg])
+    if "elbow_rad" in data and "shoulder_rad" in data:
+        elbow = data["elbow_rad"]
+        shoulder = data["shoulder_rad"]
+    else:
+        # Backwards compatibility with older files that only store degrees.
+        elbow_deg = data["elbow_deg"]
+        shoulder_deg = data["shoulder_deg"]
+        elbow = np.deg2rad(elbow_deg)
+        shoulder = np.deg2rad(shoulder_deg)
+
+    if shoulder.ndim == 1:
+        shoulder = shoulder[:, None]
+    q_demo = np.column_stack([elbow, shoulder])
     valid = np.all(np.isfinite(q_demo), axis=1)
     q_demo = q_demo[valid]
     if q_demo.shape[0] < 10:
@@ -61,7 +69,10 @@ def plot_dmp_trajectory(
     """Fit DMP from trial angles.npz, rollout, and plot demo vs generated."""
     q_demo = load_angles_demo(trial_dir)
     # Smooth demonstrated angles before fitting / finite‑difference derivatives.
-    q_demo = smooth_angles_deg(q_demo)
+    # NOTE: q_demo is now in radians, but smooth_angles_deg only depends on
+    # relative shape/scale, so it can be safely applied here as-is.
+    q_demo = smooth_angles_deg(np.degrees(q_demo))
+    q_demo = np.deg2rad(q_demo)
 
     T, n_joints = q_demo.shape
     tau = 1.0
@@ -78,8 +89,8 @@ def plot_dmp_trajectory(
     )
     q_gen = rollout_simple(model, q_demo[0], q_demo[-1], tau=tau, dt=dt)
 
-    # Validate generated trajectory in joint space (deg).
-    report = validate_joint_trajectory_deg(q_gen, dt, name="DMP rollout (deg)")
+    # Validate generated trajectory in joint space (still using degree-scale limits).
+    report = validate_joint_trajectory_deg(np.degrees(q_gen), dt, name="DMP rollout (deg)")
     print(report.reason)
 
     t_demo = np.linspace(0, tau, q_demo.shape[0])
@@ -99,8 +110,21 @@ def plot_dmp_trajectory(
 
     for j in range(n_joints):
         ax = axes[j]
-        ax.plot(t_demo, q_demo[:, j], color=colors_demo[j], linewidth=1.5, label="Demo (smoothed)")
-        ax.plot(t_gen, q_gen[:, j], color=colors_gen[j], linestyle="--", linewidth=1.2, label="DMP")
+        ax.plot(
+            t_demo,
+            np.degrees(q_demo[:, j]),
+            color=colors_demo[j],
+            linewidth=1.5,
+            label="Demo (smoothed)",
+        )
+        ax.plot(
+            t_gen,
+            np.degrees(q_gen[:, j]),
+            color=colors_gen[j],
+            linestyle="--",
+            linewidth=1.2,
+            label="DMP",
+        )
         ax.set_ylabel("Angle (deg)")
         ax.set_title(joint_names[j])
         ax.legend(loc="upper right")

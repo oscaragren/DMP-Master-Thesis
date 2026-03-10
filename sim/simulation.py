@@ -22,16 +22,24 @@ if str(_project_root) not in sys.path:
 
 
 def load_angles_trajectory(trial_dir: Path) -> np.ndarray:
-    """Load (T, 4) angles in degrees from angles.npz. Returns array, finite only."""
+    """Load (T, 4) angles from angles.npz. Returns array in radians, finite only."""
     npz_path = trial_dir / "angles.npz"
     if not npz_path.exists():
         raise FileNotFoundError(f"Expected angles.npz at {npz_path}")
     data = np.load(npz_path)
-    elbow_deg = np.atleast_1d(data["elbow_deg"])
-    shoulder_deg = np.atleast_2d(data["shoulder_deg"])
-    if shoulder_deg.ndim == 1:
-        shoulder_deg = shoulder_deg[:, None]
-    q = np.column_stack([elbow_deg, shoulder_deg])
+    if "elbow_rad" in data and "shoulder_rad" in data:
+        elbow = np.atleast_1d(data["elbow_rad"])
+        shoulder = np.atleast_2d(data["shoulder_rad"])
+    else:
+        # Backwards compatibility for older files that only store degrees.
+        elbow_deg = np.atleast_1d(data["elbow_deg"])
+        shoulder_deg = np.atleast_2d(data["shoulder_deg"])
+        elbow = np.deg2rad(elbow_deg)
+        shoulder = np.deg2rad(shoulder_deg)
+
+    if shoulder.ndim == 1:
+        shoulder = shoulder[:, None]
+    q = np.column_stack([elbow, shoulder])
     valid = np.all(np.isfinite(q), axis=1)
     q = q[valid]
     if q.shape[0] < 2:
@@ -99,21 +107,20 @@ def main():
     controlled_indices = get_arm_joint_indices(physics_client, body_uid, controlled_names)
     fixed_arm_indices = get_arm_joint_indices(physics_client, body_uid, arm_fixed_names)
 
-    # 4. Load trajectory (degrees) and convert to radians
+    # 4. Load trajectory in radians
     try:
-        q_deg = load_angles_trajectory(args.trial_dir)
+        q_rad = load_angles_trajectory(args.trial_dir)
     except FileNotFoundError:
         # Fallback: short dummy trajectory so the script still runs
         T = 60
         t = np.linspace(0, 1, T)
-        q_deg = np.column_stack([
+        q_rad = np.deg2rad(np.column_stack([
             30 + 20 * np.sin(2 * np.pi * t),   # elbow
             45 + 30 * np.sin(2 * np.pi * t),  # shoulder elevation
             np.zeros(T),                       # azimuth
             np.zeros(T),                       # internal rot
-        ])
+        ]))
         print("angles.npz not found; using dummy trajectory")
-    q_rad = np.deg2rad(q_deg)
     T = q_rad.shape[0]
 
     # 5. Kinematic playback: no gravity, set joint state directly so the arm stays connected

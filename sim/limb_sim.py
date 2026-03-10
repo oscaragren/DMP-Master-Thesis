@@ -1,25 +1,25 @@
 """
-Play back a DMP-generated left-arm trajectory on the InMoov model in PyBullet.
+Play back a DMP‑generated left‑arm trajectory on the standalone arm model in PyBullet.
+
+This is analogous to sim/inmoov_sim.py, but loads the URDF in sim/arm/left_arm.urdf
+instead of the full InMoov model.
 
 Usage (from project root):
 
-    python sim/inmoov_sim.py --trial-dir path/to/trial
+    python sim/limb_sim.py --trial-dir path/to/trial
 
 where the trial directory contains `angles.npz` produced by your pipeline
-(`elbow_deg` + `shoulder_deg`).
+(`elbow_deg` + `shoulder_deg`), with the convention:
 
-We:
-- load a demo in joint space (elbow + 3 shoulder DOFs) from angles.npz
-- fit a DMP and rollout a generated trajectory
-- map these 4 angles to the InMoov left shoulder (3 DOFs) + left wrist roll
+    [elbow_flexion, shoulder_flexion, shoulder_abduction, shoulder_internal_rotation] (deg)
 """
 
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 import time
-import math
 from pathlib import Path
 
 import numpy as np
@@ -45,9 +45,14 @@ def load_dmp_trajectory(trial_dir: Path) -> tuple[np.ndarray, float]:
         q_rad: (T, 4) numpy array, joint angles in radians
         dt:   timestep used for the rollout (seconds, normalized time)
     """
-    # load_angles_demo now gives radians (with deg fallback).
-    q_demo = load_angles_demo(trial_dir)  # (T, 4), elbow + 3 shoulder DOFs
-    # Smooth via degrees then convert back to radians for consistency.
+    # angles.npz convention:
+    #   0: elbow_flexion
+    #   1: shoulder_flexion
+    #   2: shoulder_abduction
+    #   3: shoulder_internal_rotation
+    # load_angles_demo now prefers radians and falls back to degrees.
+    q_demo = load_angles_demo(trial_dir)  # (T, 4), radians
+    # Smooth in degree domain and convert back to radians for stability.
     q_demo = np.deg2rad(smooth_angles_deg(np.degrees(q_demo)))
 
     T, n_joints = q_demo.shape
@@ -68,7 +73,7 @@ def load_dmp_trajectory(trial_dir: Path) -> tuple[np.ndarray, float]:
     )
 
     q_gen = rollout_simple(model, q_demo[0], q_demo[-1], tau=tau, dt=dt)
-    # Clamp DMP rollout to robot joint limits (radians) before playback.
+    # Clamp to robot joint limits in radians before playback.
     q_gen = clamp_dmp_vector(q_gen)
     return q_gen, dt
 
@@ -88,7 +93,7 @@ def joint_index(body_uid: int, joint_name: str) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Play back a DMP‑generated left‑arm trajectory on InMoov in PyBullet."
+        description="Play back a DMP‑generated left‑arm trajectory on the standalone arm URDF in PyBullet."
     )
     parser.add_argument(
         "--trial-dir",
@@ -99,20 +104,20 @@ def main() -> None:
         / "subject_01"
         / "lift"
         / "trial_003",
-        help="Trial directory containing angles.npz (default: subject_01/reach/trial_008).",
+        help="Trial directory containing angles.npz (default: subject_01/lift/trial_003).",
     )
     parser.add_argument("--loop", action="store_true", help="Loop playback.")
     parser.add_argument(
-        "--azimuth-offset-deg",
+        "--abd-offset-deg",
         type=float,
-        default=-90.0,
-        help="Constant offset applied to shoulder azimuth before mapping to InMoov yaw joint (deg).",
+        default=0.0,
+        help="Constant offset applied to shoulder abduction before mapping to shoulder yaw joint (deg).",
     )
     parser.add_argument(
-        "--azimuth-sign",
+        "--abd-sign",
         type=float,
         default=1.0,
-        help="Sign applied to shoulder azimuth before offset (use -1 if direction is flipped).",
+        help="Sign applied to shoulder abduction before offset (use -1 if direction is flipped).",
     )
     args = parser.parse_args()
 
@@ -124,57 +129,60 @@ def main() -> None:
     q_traj, dt = load_dmp_trajectory(trial_dir)  # (T, 4), radians
     T, n_joints = q_traj.shape
 
-    # 2. Connect PyBullet and load InMoov URDF
+    # 2. Connect PyBullet and load standalone arm URDF
     p.connect(p.GUI)
     p.setGravity(0, 0, 0)  # kinematic playback
 
-    inmoov_dir = _sim_dir / "inmoov"
-    p.setAdditionalSearchPath(str(inmoov_dir))
-    urdf_path = inmoov_dir / "inmoov.urdf"
+    sim_dir = _sim_dir
+    p.setAdditionalSearchPath(str(sim_dir))
+    urdf_rel = "arm/left_arm.urdf"
+    urdf_path = sim_dir / urdf_rel
     if not urdf_path.exists():
         p.disconnect()
         raise FileNotFoundError(f"URDF not found: {urdf_path}")
 
-    # Default orientation (no extra rotation).
-    base_orn = p.getQuaternionFromEuler([0.0, 0.0, 0.0])
     robot = p.loadURDF(
-        str(urdf_path),
+        urdf_rel,
         basePosition=[0, 0, 0],
-        baseOrientation=base_orn,
+        baseOrientation=p.getQuaternionFromEuler([0.0, 0.0, 0.0]),
         useFixedBase=True,
     )
 
-    print("Loaded InMoov joints:")
+    print("Loaded arm joints:")
     for j in range(p.getNumJoints(robot)):
         info = p.getJointInfo(robot, j)
         print(j, info[1].decode("utf-8"))
 
-    # 3. Map DMP joints to InMoov left arm joints
+    # 3. Map DMP joints to arm joints
     #
-    # DMP order (4 DOFs), from angles.npz convention:
+    # DMP order (4 DOFs):
     #   0: elbow_flexion
     #   1: shoulder_flexion
     #   2: shoulder_abduction
     #   3: shoulder_internal_rotation
     #
-    # InMoov left arm joints (approximate anatomical mapping):
-    #   l_shoulder_yaw_joint   (about Z)   <-- use shoulder_abduction (left/right)
-    #   l_shoulder_pitch_joint (about Y)   <-- use shoulder_flexion (up/down in sagittal plane)
-    #   l_shoulder_out_joint   (about X)   <-- use shoulder_internal_rotation
-    #   l_wrist_roll_joint     (about Z)   <-- (optionally) use elbow_flexion
-    l_sh_yaw = joint_index(robot, "l_shoulder_yaw_joint")
-    l_sh_pitch = joint_index(robot, "l_shoulder_pitch_joint")
-    l_sh_roll = joint_index(robot, "l_shoulder_out_joint")
-    l_wrist = joint_index(robot, "l_wrist_roll_joint")
+    # Arm URDF joints (left arm, approximate anatomical mapping):
+    #   jLeftShoulder_rotz  (about Z in arm base frame)  <-- use shoulder_abduction
+    #   jLeftShoulder_rotx  (about X)                   <-- use shoulder_flexion
+    #   jLeftShoulder_roty  (about Y)                   <-- use shoulder_internal_rotation
+    #   jLeftElbow_roty     (about Y)                   <-- use elbow_flexion
+    #
+    # Additional joints (not driven here, but available):
+    #   jLeftElbow_rotz     (forearm rotation)
+    #   jLeftWrist_rotx, jLeftWrist_rotz, finger joints ...
+    sh_rotz = joint_index(robot, "jLeftShoulder_rotz")
+    sh_rotx = joint_index(robot, "jLeftShoulder_rotx")
+    sh_roty = joint_index(robot, "jLeftShoulder_roty")
+    elbow_roty = joint_index(robot, "jLeftElbow_roty")
 
     # Disable motors so resetJointState fully controls pose
     num_joints = p.getNumJoints(robot)
     for j in range(num_joints):
         p.setJointMotorControl2(robot, j, p.POSITION_CONTROL, force=0.0)
 
-    print(f"Starting DMP playback from {trial_dir}")
-    az_offset = math.radians(float(args.azimuth_offset_deg))
-    az_sign = float(args.azimuth_sign)
+    print(f"Starting DMP playback on standalone arm from {trial_dir}")
+    abd_offset = math.radians(float(args.abd_offset_deg))
+    abd_sign = float(args.abd_sign)
 
     try:
         while True:
@@ -187,12 +195,11 @@ def main() -> None:
                 sh_int = float(q_t[3])
 
                 # Simple mapping as described above.
-                # Align "human forward" with robot forward by applying a constant abduction offset.
-                sh_abd_mapped = az_sign * sh_abd + az_offset
-                p.resetJointState(robot, l_sh_yaw, sh_abd_mapped)
-                p.resetJointState(robot, l_sh_pitch, sh_flex)
-                p.resetJointState(robot, l_sh_roll, sh_int)
-                p.resetJointState(robot, l_wrist, elbow)
+                sh_abd_mapped = abd_sign * sh_abd + abd_offset
+                p.resetJointState(robot, sh_rotz, sh_abd_mapped)
+                p.resetJointState(robot, sh_rotx, sh_flex)
+                p.resetJointState(robot, sh_roty, sh_int)
+                p.resetJointState(robot, elbow_roty, elbow)
 
                 p.stepSimulation()
                 time.sleep(dt)
@@ -200,7 +207,7 @@ def main() -> None:
             if not args.loop:
                 break
     finally:
-        print("Playback finished. Close the GUI window to exit.")
+        print("Playback finished. Close the PyBullet window to exit.")
         p.disconnect()
 
 

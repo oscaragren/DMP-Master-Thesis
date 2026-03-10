@@ -45,14 +45,15 @@ def load_dmp_trajectory() -> tuple[np.ndarray, float]:
             "Adjust the path in sim/test_sim.py or generate test_data/processed first."
         )
 
-    # Demo is in degrees (elbow + 3 shoulder angles), shape (T, 4)
-    # Convention matches vis/plot_dmp_trajectory.load_angles_demo:
-    #   [elbow_flexion, shoulder_flexion, shoulder_abduction, shoulder_internal_rotation]
-    q_demo_deg = load_angles_demo(trial_dir)
+    # Demo is in radians (elbow + 3 shoulder angles), shape (T, 4) after loading.
+    # Convention matches vis/plot_dmp_trajectory.load_angles_demo.
+    q_demo = load_angles_demo(trial_dir)
     # Smooth demonstrated joint angles to suppress sensor noise before fitting.
-    q_demo_deg = smooth_angles_deg(q_demo_deg)
+    # Use degree-domain smoothing for consistency with existing limits, then
+    # convert back to radians.
+    q_demo = np.deg2rad(smooth_angles_deg(np.degrees(q_demo)))
 
-    T, n_joints = q_demo_deg.shape
+    T, n_joints = q_demo.shape
     if n_joints != 4:
         raise ValueError(f"Expected 4-DOF demo, got shape {q_demo_deg.shape}")
 
@@ -61,7 +62,7 @@ def load_dmp_trajectory() -> tuple[np.ndarray, float]:
     dt = tau / (T - 1)
 
     model = fit(
-        [q_demo_deg],
+        [q_demo],
         tau=tau,
         dt=dt,
         n_basis_functions=15,
@@ -70,13 +71,12 @@ def load_dmp_trajectory() -> tuple[np.ndarray, float]:
         beta_transformation=6.25,
     )
 
-    q_gen_deg = rollout_simple(model, q_demo_deg[0], q_demo_deg[-1], tau=tau, dt=dt)
+    q_gen = rollout_simple(model, q_demo[0], q_demo[-1], tau=tau, dt=dt)
 
-    # Validate generated trajectory (deg) against human‑like limits.
-    #validate_joint_trajectory_deg(q_gen_deg, dt, raise_on_error=True, name="DMP rollout (deg)")
+    # Validate generated trajectory in degree domain against human‑like limits.
+    # validate_joint_trajectory_deg(np.degrees(q_gen), dt, raise_on_error=True, name="DMP rollout (deg)")
 
-    q_gen_rad = np.deg2rad(q_gen_deg)
-    return q_gen_rad, dt
+    return q_gen, dt
 
 
 def get_joint_indices_by_name(body_uid: int, names: list[str]) -> list[int]:

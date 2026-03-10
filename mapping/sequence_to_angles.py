@@ -4,8 +4,9 @@ Convert left-arm 3D keypoint sequences (from camera video) to joint angles.
 Input: seq (T, 4, 3) with [left_shoulder, left_elbow, left_wrist, right_shoulder]
 in camera-frame meters (e.g. from capture/3d_pose.py).
 
-Output: elbow flexion (T,) and shoulder 3-DOF angles (T, 3) in degrees,
-suitable for plotting and downstream use.
+Output: elbow flexion (T,) and shoulder 3-DOF angles (T, 3) in **radians**
+for downstream use. Convenience helpers exist to also obtain degrees when
+plotting, but the canonical representation is radians.
 """
 import argparse
 import json
@@ -20,28 +21,43 @@ if __name__ == "__main__":
     if str(_root) not in sys.path:
         sys.path.insert(0, str(_root))
 
-from kinematics.left_arm_angles import elbow_flexion_deg, shoulder_flex_abd_rot_3dof
+from kinematics.left_arm_angles import (
+    elbow_flexion_deg,
+    shoulder_flex_abd_rot_3dof,
+    elbow_flexion_rad,
+    shoulder_flex_abd_rot_3dof_rad,
+)
 
 
-def sequence_to_angles(seq: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def sequence_to_angles_rad(seq: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """
-    Convert a left-arm 3D sequence to elbow and shoulder angles.
+    Convert a left-arm 3D sequence to elbow and shoulder angles in **radians**.
 
     seq: (T, 4, 3) with [left_shoulder, left_elbow, left_wrist, right_shoulder]
          in camera-frame meters.
 
     Returns:
-        elbow_deg: (T,) elbow flexion in degrees; NaN where invalid.
-        shoulder_deg: (T, 3) shoulder angles in degrees
+        elbow_rad: (T,) elbow flexion in radians; NaN where invalid.
+        shoulder_rad: (T, 3) shoulder angles in radians
             [shoulder_flexion, shoulder_abduction, shoulder_internal_rotation]; NaN where invalid.
     """
     if seq.ndim != 3 or seq.shape[1] != 4 or seq.shape[2] != 3:
         raise ValueError(
             f"Expected seq shape (T, 4, 3) [left_shoulder, left_elbow, left_wrist, right_shoulder], got {seq.shape}"
         )
-    elbow_deg = elbow_flexion_deg(seq)
-    shoulder_deg = shoulder_flex_abd_rot_3dof(seq)
-    return elbow_deg, shoulder_deg
+    elbow_rad = elbow_flexion_rad(seq)
+    shoulder_rad = shoulder_flex_abd_rot_3dof_rad(seq)
+    return elbow_rad, shoulder_rad
+
+
+def sequence_to_angles(seq: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Backwards-compatible helper that returns angles in **degrees**.
+
+    Prefer `sequence_to_angles_rad` for new code.
+    """
+    elbow_rad, shoulder_rad = sequence_to_angles_rad(seq)
+    return np.degrees(elbow_rad), np.degrees(shoulder_rad)
 
 
 def save_angles_for_trial(trial_dir: Path) -> tuple[np.ndarray, np.ndarray]:
@@ -51,15 +67,24 @@ def save_angles_for_trial(trial_dir: Path) -> tuple[np.ndarray, np.ndarray]:
     trial_dir: path to trial (e.g. test_data/processed/subject_01/reach/trial_001).
 
     Returns:
-        elbow_deg (T,), shoulder_deg (T, 3).
+        elbow_rad (T,), shoulder_rad (T, 3).
     """
     seq_path = trial_dir / "left_arm_seq_camera.npy"
     if not seq_path.exists():
         raise FileNotFoundError(f"Not found: {seq_path}")
     seq = np.load(seq_path)
-    elbow_deg, shoulder_deg = sequence_to_angles(seq)
+    elbow_rad, shoulder_rad = sequence_to_angles_rad(seq)
+    elbow_deg = np.degrees(elbow_rad)
+    shoulder_deg = np.degrees(shoulder_rad)
     out_path = trial_dir / "angles.npz"
-    np.savez(out_path, elbow_deg=elbow_deg, shoulder_deg=shoulder_deg)
+    # Save both radians (canonical) and degrees (for backwards compatibility / plotting).
+    np.savez(
+        out_path,
+        elbow_rad=elbow_rad,
+        shoulder_rad=shoulder_rad,
+        elbow_deg=elbow_deg,
+        shoulder_deg=shoulder_deg,
+    )
     meta_path = trial_dir / "meta.json"
     meta = {}
     if meta_path.exists():
@@ -68,8 +93,8 @@ def save_angles_for_trial(trial_dir: Path) -> tuple[np.ndarray, np.ndarray]:
     meta["angles_source"] = "mapping/sequence_to_angles.py"
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(meta, f, indent=2)
-    print(f"Saved {out_path} (elbow: {elbow_deg.shape}, shoulder: {shoulder_deg.shape})")
-    return elbow_deg, shoulder_deg
+    print(f"Saved {out_path} (elbow: {elbow_rad.shape}, shoulder: {shoulder_rad.shape})")
+    return elbow_rad, shoulder_rad
 
 
 def main():

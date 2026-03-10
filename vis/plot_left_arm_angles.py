@@ -18,7 +18,7 @@ if str(_project_root) not in sys.path:
 import matplotlib.pyplot as plt
 import numpy as np
 
-from mapping.sequence_to_angles import sequence_to_angles
+from mapping.sequence_to_angles import sequence_to_angles_rad
 
 
 def load_trial(trial_dir: Path):
@@ -48,7 +48,9 @@ def plot_angles_over_time(
     out_path: Path | None = None,
 ):
     """Plot elbow flexion and shoulder angles (flexion, abduction, internal rotation) vs time."""
-    elbow_deg, shoulder_deg = sequence_to_angles(seq)
+    elbow_rad, shoulder_rad = sequence_to_angles_rad(seq)
+    elbow_deg = np.degrees(elbow_rad)
+    shoulder_deg = np.degrees(shoulder_rad)
 
     fig, axes = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
 
@@ -89,7 +91,13 @@ def plot_angles_over_time(
         plt.savefig(out_path, dpi=120)
         print(f"Saved {out_path}")
         npz_path = out_path.parent / "angles.npz"
-        np.savez(npz_path, elbow_deg=elbow_deg, shoulder_deg=shoulder_deg)
+        np.savez(
+            npz_path,
+            elbow_rad=elbow_rad,
+            shoulder_rad=shoulder_rad,
+            elbow_deg=elbow_deg,
+            shoulder_deg=shoulder_deg,
+        )
         print(f"Saved {npz_path}")
     else:
         plt.show()
