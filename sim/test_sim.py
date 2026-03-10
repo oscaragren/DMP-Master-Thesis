@@ -15,6 +15,10 @@ import pybullet as p
 import pybullet_data
 
 from dmp.dmp import fit, rollout_simple
+from kinematics.joint_dynamics import (
+    smooth_angles_deg,
+    validate_joint_trajectory_deg,
+)
 from vis.plot_dmp_trajectory import load_angles_demo
 
 
@@ -33,7 +37,7 @@ def load_dmp_trajectory() -> tuple[np.ndarray, float]:
     """
     project_root = get_project_root()
     # Default trial directory, matching other utilities in this repo
-    trial_dir = project_root / "test_data" / "processed" / "subject_01" / "reach" / "trial_004"
+    trial_dir = project_root / "test_data" / "processed" / "subject_01" / "reach" / "trial_008"
 
     if not trial_dir.exists():
         raise FileNotFoundError(
@@ -43,6 +47,9 @@ def load_dmp_trajectory() -> tuple[np.ndarray, float]:
 
     # Demo is in degrees (elbow + 3 shoulder angles), shape (T, 4)
     q_demo_deg = load_angles_demo(trial_dir)
+    # Smooth demonstrated joint angles to suppress sensor noise before fitting.
+    q_demo_deg = smooth_angles_deg(q_demo_deg)
+
     T, n_joints = q_demo_deg.shape
     if n_joints != 4:
         raise ValueError(f"Expected 4-DOF demo, got shape {q_demo_deg.shape}")
@@ -62,6 +69,10 @@ def load_dmp_trajectory() -> tuple[np.ndarray, float]:
     )
 
     q_gen_deg = rollout_simple(model, q_demo_deg[0], q_demo_deg[-1], tau=tau, dt=dt)
+
+    # Validate generated trajectory (deg) against human‑like limits.
+    #validate_joint_trajectory_deg(q_gen_deg, dt, raise_on_error=True, name="DMP rollout (deg)")
+
     q_gen_rad = np.deg2rad(q_gen_deg)
     return q_gen_rad, dt
 

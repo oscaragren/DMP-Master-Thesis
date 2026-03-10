@@ -18,6 +18,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from dmp.dmp import fit, rollout_simple
+from kinematics.joint_dynamics import (
+    smooth_angles_deg,
+    validate_joint_trajectory_deg,
+)
 
 
 def load_angles_demo(trial_dir: Path) -> np.ndarray:
@@ -48,6 +52,9 @@ def plot_dmp_trajectory(
 ):
     """Fit DMP from trial angles.npz, rollout, and plot demo vs generated."""
     q_demo = load_angles_demo(trial_dir)
+    # Smooth demonstrated angles before fitting / finite‑difference derivatives.
+    q_demo = smooth_angles_deg(q_demo)
+
     T, n_joints = q_demo.shape
     tau = 1.0
     dt = tau / (T - 1)
@@ -63,6 +70,10 @@ def plot_dmp_trajectory(
     )
     q_gen = rollout_simple(model, q_demo[0], q_demo[-1], tau=tau, dt=dt)
 
+    # Validate generated trajectory in joint space (deg).
+    report = validate_joint_trajectory_deg(q_gen, dt, name="DMP rollout (deg)")
+    print(report.reason)
+
     t_demo = np.linspace(0, tau, q_demo.shape[0])
     t_gen = np.linspace(0, tau, q_gen.shape[0])
 
@@ -75,7 +86,7 @@ def plot_dmp_trajectory(
 
     for j in range(n_joints):
         ax = axes[j]
-        ax.plot(t_demo, q_demo[:, j], color=colors_demo[j], linewidth=1.5, label="Demo")
+        ax.plot(t_demo, q_demo[:, j], color=colors_demo[j], linewidth=1.5, label="Demo (smoothed)")
         ax.plot(t_gen, q_gen[:, j], color=colors_gen[j], linestyle="--", linewidth=1.2, label="DMP")
         ax.set_ylabel("Angle (deg)")
         ax.set_title(joint_names[j])
