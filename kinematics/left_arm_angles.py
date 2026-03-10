@@ -149,3 +149,69 @@ def shoulder_angles_3dof(seq: np.ndarray) -> np.ndarray:
 
     out[~valid, :] = np.nan
     return out
+
+
+def shoulder_flex_abd_rot_3dof(seq: np.ndarray) -> np.ndarray:
+    """
+    Compute 3-DOF shoulder angles (flexion/extension, abduction/adduction, internal rotation).
+
+    seq: (T, 4, 3) with [left_shoulder, left_elbow, left_wrist, right_shoulder] in meters (camera frame).
+
+    Returns:
+        (T, 3) in degrees:
+            [flexion_deg, abduction_deg, internal_rotation_deg]
+        NaN where keypoints are missing or degenerate.
+
+    Conventions (using trunk frame x,y,z from shoulders):
+        - Flexion/extension:
+            * Measured in the sagittal plane spanned by (y_trunk, z_trunk).
+            * 0° ≈ arm aligned with +y_trunk (up), +90° ≈ arm forward (+z_trunk).
+        - Abduction/adduction:
+            * Measured in the frontal plane spanned by (y_trunk, x_trunk).
+            * 0° ≈ arm aligned with +y_trunk (up), +90° ≈ arm out to the side (+x_trunk).
+        - Internal rotation:
+            * Same definition as in shoulder_angles_3dof — twist of the humerus about its long axis.
+    """
+    T = seq.shape[0]
+    ls = seq[:, 0, :]   # left shoulder
+    rs = seq[:, 3, :]   # right shoulder
+
+    upper_arm, forearm = limb_vectors(seq)
+
+    x_trunk, y_trunk, z_trunk = _trunk_frame_from_shoulders(ls, rs)
+
+    valid = (
+        np.all(np.isfinite(seq), axis=(1, 2))
+        & (np.linalg.norm(upper_arm, axis=1) > 1e-8)
+        & (np.linalg.norm(forearm, axis=1) > 1e-8)
+        & np.all(np.isfinite(x_trunk), axis=1)
+        & np.all(np.isfinite(y_trunk), axis=1)
+        & np.all(np.isfinite(z_trunk), axis=1)
+    )
+
+    out = np.full((T, 3), np.nan, dtype=np.float64)
+
+    # Flexion/extension: angle of upper-arm projection in sagittal (y,z) plane.
+    # Remove left-right component (x_trunk) to stay in sagittal plane.
+    ua_sag = upper_arm - np.einsum("ij,ij->i", upper_arm, x_trunk)[:, None] * x_trunk
+    comp_y = np.einsum("ij,ij->i", ua_sag, y_trunk)
+    comp_z = np.einsum("ij,ij->i", ua_sag, z_trunk)
+    flex_rad = np.arctan2(comp_z, comp_y)
+    out[:, 0] = np.degrees(flex_rad)
+
+    # Abduction/adduction: angle of upper-arm projection in frontal (y,x) plane.
+    # Remove forward/back component (z_trunk) to stay in frontal plane.
+    ua_front = upper_arm - np.einsum("ij,ij->i", upper_arm, z_trunk)[:, None] * z_trunk
+    comp_y_f = np.einsum("ij,ij->i", ua_front, y_trunk)
+    comp_x = np.einsum("ij,ij->i", ua_front, x_trunk)
+    abd_rad = np.arctan2(comp_x, comp_y_f)
+    out[:, 1] = np.degrees(abd_rad)
+
+    # Internal rotation: identical to shoulder_angles_3dof.
+    n_ref = np.cross(upper_arm, y_trunk)
+    n_arm = np.cross(upper_arm, forearm)
+    internal_rad = _signed_angle_around_axis(n_ref, n_arm, upper_arm)
+    out[:, 2] = np.degrees(internal_rad)
+
+    out[~valid, :] = np.nan
+    return out

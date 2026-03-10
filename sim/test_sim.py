@@ -46,6 +46,8 @@ def load_dmp_trajectory() -> tuple[np.ndarray, float]:
         )
 
     # Demo is in degrees (elbow + 3 shoulder angles), shape (T, 4)
+    # Convention matches vis/plot_dmp_trajectory.load_angles_demo:
+    #   [elbow_flexion, shoulder_flexion, shoulder_abduction, shoulder_internal_rotation]
     q_demo_deg = load_angles_demo(trial_dir)
     # Smooth demonstrated joint angles to suppress sensor noise before fitting.
     q_demo_deg = smooth_angles_deg(q_demo_deg)

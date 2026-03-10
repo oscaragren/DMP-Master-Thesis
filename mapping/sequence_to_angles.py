@@ -20,7 +20,7 @@ if __name__ == "__main__":
     if str(_root) not in sys.path:
         sys.path.insert(0, str(_root))
 
-from kinematics.left_arm_angles import elbow_flexion_deg, shoulder_angles_3dof
+from kinematics.left_arm_angles import elbow_flexion_deg, shoulder_flex_abd_rot_3dof
 
 
 def sequence_to_angles(seq: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -32,14 +32,15 @@ def sequence_to_angles(seq: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
     Returns:
         elbow_deg: (T,) elbow flexion in degrees; NaN where invalid.
-        shoulder_deg: (T, 3) shoulder angles in degrees [elevation, azimuth, internal_rotation]; NaN where invalid.
+        shoulder_deg: (T, 3) shoulder angles in degrees
+            [shoulder_flexion, shoulder_abduction, shoulder_internal_rotation]; NaN where invalid.
     """
     if seq.ndim != 3 or seq.shape[1] != 4 or seq.shape[2] != 3:
         raise ValueError(
             f"Expected seq shape (T, 4, 3) [left_shoulder, left_elbow, left_wrist, right_shoulder], got {seq.shape}"
         )
     elbow_deg = elbow_flexion_deg(seq)
-    shoulder_deg = shoulder_angles_3dof(seq)
+    shoulder_deg = shoulder_flex_abd_rot_3dof(seq)
     return elbow_deg, shoulder_deg
 
 

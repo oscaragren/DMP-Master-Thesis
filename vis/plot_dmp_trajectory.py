@@ -25,7 +25,15 @@ from kinematics.joint_dynamics import (
 
 
 def load_angles_demo(trial_dir: Path) -> np.ndarray:
-    """Load elbow + shoulder angles from angles.npz; return (T, 4) demo, finite only."""
+    """Load elbow + shoulder angles from angles.npz; return (T, 4) demo, finite only.
+
+    Convention:
+        column 0: elbow flexion
+        column 1: shoulder flexion
+        column 2: shoulder abduction
+        column 3: shoulder internal rotation
+    All in degrees.
+    """
     npz_path = trial_dir / "angles.npz"
     if not npz_path.exists():
         raise FileNotFoundError(
@@ -77,7 +85,12 @@ def plot_dmp_trajectory(
     t_demo = np.linspace(0, tau, q_demo.shape[0])
     t_gen = np.linspace(0, tau, q_gen.shape[0])
 
-    joint_names = ["Elbow flexion", "Shoulder elevation", "Shoulder azimuth", "Shoulder internal rot."]
+    joint_names = [
+        "Elbow flexion",
+        "Shoulder flexion",
+        "Shoulder abduction",
+        "Shoulder internal rotation",
+    ]
     colors_demo = ["#3498db", "#e74c3c", "#2ecc71", "#9b59b6"]
     colors_gen = ["#2980b9", "#c0392b", "#27ae60", "#8e44ad"]
 

@@ -47,7 +47,7 @@ def plot_angles_over_time(
     meta: dict,
     out_path: Path | None = None,
 ):
-    """Plot elbow flexion and shoulder angles (elevation, azimuth, internal rotation) vs time."""
+    """Plot elbow flexion and shoulder angles (flexion, abduction, internal rotation) vs time."""
     elbow_deg, shoulder_deg = sequence_to_angles(seq)
 
     fig, axes = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
@@ -63,9 +63,9 @@ def plot_angles_over_time(
     ax.grid(True, alpha=0.3)
     ax.set_ylim(0, 200)
 
-    # Shoulder: elevation, azimuth, internal rotation
+    # Shoulder: flexion, abduction, internal rotation
     ax = axes[1]
-    labels = ["Elevation", "Azimuth", "Internal rotation"]
+    labels = ["Flexion", "Abduction", "Internal rotation"]
     colors = ["#e74c3c", "#2ecc71", "#9b59b6"]
     for i, (label, color) in enumerate(zip(labels, colors)):
         vals = shoulder_deg[:, i]
@@ -74,7 +74,7 @@ def plot_angles_over_time(
             ax.plot(t[valid], vals[valid], color=color, linewidth=1.5, label=label)
     ax.set_xlabel("Time (s)")
     ax.set_ylabel("Angle (deg)")
-    ax.set_title("Shoulder 3-DOF (elevation, azimuth, internal rotation)")
+    ax.set_title("Shoulder 3-DOF (flexion, abduction, internal rotation)")
     ax.legend(loc="upper right")
     ax.grid(True, alpha=0.3)
     ax.axhline(0, color="gray", linestyle="--", alpha=0.5)

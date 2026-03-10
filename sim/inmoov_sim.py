@@ -147,15 +147,15 @@ def main() -> None:
 
     # 3. Map DMP joints to InMoov left arm joints
     #
-    # DMP order (4 DOFs), from JOINT_NAMES_4DOF:
+    # DMP order (4 DOFs), from angles.npz convention:
     #   0: elbow_flexion
-    #   1: shoulder_elevation
-    #   2: shoulder_azimuth
+    #   1: shoulder_flexion
+    #   2: shoulder_abduction
     #   3: shoulder_internal_rotation
     #
-    # InMoov left arm joints:
-    #   l_shoulder_yaw_joint   (about Z)   <-- use shoulder_azimuth
-    #   l_shoulder_pitch_joint (about Y)   <-- use shoulder_elevation
+    # InMoov left arm joints (approximate anatomical mapping):
+    #   l_shoulder_yaw_joint   (about Z)   <-- use shoulder_abduction (left/right)
+    #   l_shoulder_pitch_joint (about Y)   <-- use shoulder_flexion (up/down in sagittal plane)
     #   l_shoulder_out_joint   (about X)   <-- use shoulder_internal_rotation
     #   l_wrist_roll_joint     (about Z)   <-- (optionally) use elbow_flexion
     l_sh_yaw = joint_index(robot, "l_shoulder_yaw_joint")
@@ -178,15 +178,15 @@ def main() -> None:
                 q_t = q_traj[t_idx]
 
                 elbow = float(q_t[0])
-                sh_elev = float(q_t[1])
-                sh_az = float(q_t[2])
+                sh_flex = float(q_t[1])
+                sh_abd = float(q_t[2])
                 sh_int = float(q_t[3])
 
                 # Simple mapping as described above.
-                # Align "human forward" with robot forward by applying a constant azimuth offset.
-                sh_az_mapped = az_sign * sh_az + az_offset
-                p.resetJointState(robot, l_sh_yaw, sh_az_mapped)
-                p.resetJointState(robot, l_sh_pitch, sh_elev)
+                # Align "human forward" with robot forward by applying a constant abduction offset.
+                sh_abd_mapped = az_sign * sh_abd + az_offset
+                p.resetJointState(robot, l_sh_yaw, sh_abd_mapped)
+                p.resetJointState(robot, l_sh_pitch, sh_flex)
                 p.resetJointState(robot, l_sh_roll, sh_int)
                 p.resetJointState(robot, l_wrist, elbow)
 
