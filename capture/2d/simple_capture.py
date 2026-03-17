@@ -11,14 +11,14 @@ parser.add_argument("--motion", type=str, required=True, help="Motion name (e.g.
 parser.add_argument("--trial", type=int, required=True, help="Trial number")
 args = parser.parse_args()
 
-OUTPUT_DIR = Path("data/raw") / f"subject_{args.subject:02d}" / args.motion / f"trial_{args.trial:03d}"
+OUTPUT_DIR = Path("test_data/raw") / f"subject_{args.subject:02d}" / args.motion / f"trial_{args.trial:03d}"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 FRAME_SIZE = (640, 400)
 FPS_NOMINAL = 30.0
-VIDEO_PATH = OUTPUT_DIR / "video.mp4"
+VIDEO_PATH = OUTPUT_DIR / f"subject_{args.subject:02d}_{args.motion}_trial_{args.trial:03d}.mp4"
 COUNTDOWN_SECONDS = 3  # 3, 2, 1 then Go
-RECORD_DURATION = 3.0  # seconds
+RECORD_DURATION = 4.0  # seconds
 
 print(f"Saving to {OUTPUT_DIR}")
 print(f"Countdown {COUNTDOWN_SECONDS}s, then recording {RECORD_DURATION}s. Press 'q' to quit early.")

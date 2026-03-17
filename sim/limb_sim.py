@@ -6,10 +6,16 @@ instead of the full InMoov model.
 
 Usage (from project root):
 
-    python sim/limb_sim.py --trial-dir path/to/trial
+    python sim/limb_sim.py --subject 1 --motion lift --trial 6
 
-where the trial directory contains `angles.npz` produced by your pipeline
-(`elbow_deg` + `shoulder_deg`), with the convention:
+or:
+
+    python sim/limb_sim.py --path test_data/processed/subject_01/lift/trial_006
+
+The trial directory should contain either:
+- a precomputed rollout `dmp_rollout_{clean|raw}.npz` (preferred), or
+- `angles*.npz` produced by your pipeline (fallback; we re-fit a DMP at runtime),
+with the convention:
 
     [elbow_flexion, shoulder_flexion, shoulder_abduction, shoulder_internal_rotation] (deg)
 """
@@ -22,7 +28,6 @@ import sys
 import time
 from pathlib import Path
 
-import numpy as np
 import pybullet as p
 
 # Ensure project root is on sys.path for imports
@@ -31,51 +36,8 @@ _project_root = _sim_dir.parent
 if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
-from dmp.dmp import fit, rollout_simple
-from kinematics.joint_dynamics import smooth_angles_deg
-from vis.plot_dmp_trajectory import load_angles_demo
+from dmp.trajectory_io import load_dmp_trajectory, resolve_saved_dmp_rollout_path
 from sim.joint_limits import clamp_dmp_vector
-
-
-def load_dmp_trajectory(trial_dir: Path) -> tuple[np.ndarray, float]:
-    """
-    Fit a DMP on a demo from angles.npz in `trial_dir` and rollout a trajectory.
-
-    Returns:
-        q_rad: (T, 4) numpy array, joint angles in radians
-        dt:   timestep used for the rollout (seconds, normalized time)
-    """
-    # angles.npz convention:
-    #   0: elbow_flexion
-    #   1: shoulder_flexion
-    #   2: shoulder_abduction
-    #   3: shoulder_internal_rotation
-    # load_angles_demo now prefers radians and falls back to degrees.
-    q_demo = load_angles_demo(trial_dir)  # (T, 4), radians
-    # Smooth in degree domain and convert back to radians for stability.
-    q_demo = np.deg2rad(smooth_angles_deg(np.degrees(q_demo)))
-
-    T, n_joints = q_demo.shape
-    if n_joints != 4:
-        raise ValueError(f"Expected 4-DOF demo, got shape {q_demo.shape}")
-
-    tau = 1.0
-    dt = tau / (T - 1)
-
-    model = fit(
-        [q_demo],
-        tau=tau,
-        dt=dt,
-        n_basis_functions=15,
-        alpha_canonical=4.0,
-        alpha_transformation=25.0,
-        beta_transformation=6.25,
-    )
-
-    q_gen = rollout_simple(model, q_demo[0], q_demo[-1], tau=tau, dt=dt)
-    # Clamp to robot joint limits in radians before playback.
-    q_gen = clamp_dmp_vector(q_gen)
-    return q_gen, dt
 
 
 def joint_index(body_uid: int, joint_name: str) -> int:
@@ -93,18 +55,41 @@ def joint_index(body_uid: int, joint_name: str) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Play back a DMP‑generated left‑arm trajectory on the standalone arm URDF in PyBullet."
+        description="Play back a DMP-generated left-arm trajectory on the standalone arm URDF in PyBullet."
     )
     parser.add_argument(
-        "--trial-dir",
+        "--path",
         type=Path,
-        default=_project_root
-        / "test_data"
-        / "processed"
-        / "subject_01"
-        / "lift"
-        / "trial_003",
-        help="Trial directory containing angles.npz (default: subject_01/lift/trial_003).",
+        default=None,
+        help="Path to trial dir (overrides subject/motion/trial).",
+    )
+    parser.add_argument("--subject", type=int, default=1, help="Subject number")
+    parser.add_argument("--motion", type=str, default="lift", help="Motion name (e.g. reach, lift)")
+    parser.add_argument("--trial", type=int, default=6, help="Trial number")
+    parser.add_argument(
+        "--data-dir",
+        type=Path,
+        default=_project_root / "test_data" / "processed",
+        help="Root directory for processed data (subject/motion/trial underneath).",
+    )
+    parser.add_argument(
+        "--source",
+        type=str,
+        choices=["raw", "clean"],
+        default="clean",
+        help="Which DMP rollout to use (default: clean).",
+    )
+    parser.add_argument(
+        "--n-basis",
+        type=int,
+        default=None,
+        help="If set, load the sweep rollout for this basis count (e.g. 10, 30, 60).",
+    )
+    parser.add_argument(
+        "--filter-order",
+        type=int,
+        default=None,
+        help="For clean sweep rollouts: filter order (required if --source clean and --n-basis is set).",
     )
     parser.add_argument("--loop", action="store_true", help="Loop playback.")
     parser.add_argument(
@@ -121,22 +106,47 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    trial_dir: Path = args.trial_dir
+    if args.path is not None:
+        trial_dir: Path = args.path
+    else:
+        trial_dir = (
+            args.data_dir
+            / f"subject_{args.subject:02d}"
+            / args.motion
+            / f"trial_{args.trial:03d}"
+        )
     if not trial_dir.exists():
         raise FileNotFoundError(f"Trial directory not found: {trial_dir}")
 
+    rollout_path = resolve_saved_dmp_rollout_path(
+        trial_dir,
+        rollout_source=args.source,
+        basis_functions=args.n_basis,
+        filter_order=args.filter_order,
+    )
+    if rollout_path is not None:
+        print(f"Loading saved DMP rollout: {rollout_path}")
+    else:
+        print("No saved DMP rollout found; will fit+rollout from angles*.npz at runtime.")
+
     # 1. Load DMP trajectory (elbow + 3 shoulder DOFs)
-    q_traj, dt = load_dmp_trajectory(trial_dir)  # (T, 4), radians
-    T, n_joints = q_traj.shape
+    q_traj, dt = load_dmp_trajectory(
+        trial_dir,
+        rollout_source=args.source,
+        basis_functions=args.n_basis,
+        filter_order=args.filter_order,
+    )  # (T, 4), radians
+    q_traj = clamp_dmp_vector(q_traj) # Clamp to joint limits
+
+    T, _n = q_traj.shape
 
     # 2. Connect PyBullet and load standalone arm URDF
     p.connect(p.GUI)
     p.setGravity(0, 0, 0)  # kinematic playback
 
-    sim_dir = _sim_dir
-    p.setAdditionalSearchPath(str(sim_dir))
+    p.setAdditionalSearchPath(str(_sim_dir))
     urdf_rel = "arm/left_arm.urdf"
-    urdf_path = sim_dir / urdf_rel
+    urdf_path = _sim_dir / urdf_rel
     if not urdf_path.exists():
         p.disconnect()
         raise FileNotFoundError(f"URDF not found: {urdf_path}")

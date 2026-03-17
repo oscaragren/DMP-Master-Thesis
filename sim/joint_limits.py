@@ -97,6 +97,8 @@ def clamp_dmp_vector(q_rad: np.ndarray) -> np.ndarray:
     q_sh_abd = q[..., 2]
     q_sh_int = q[..., 3]
 
+    # np.clip sets the value to the min or max of the range: min(max(x, min), max)
+
     q_elbow[...] = np.clip(q_elbow, JOINT_LIMITS_RAD[idx.elbow, 0], JOINT_LIMITS_RAD[idx.elbow, 1])
     q_sh_flex[...] = np.clip(
         q_sh_flex, JOINT_LIMITS_RAD[idx.shoulder_flex, 0], JOINT_LIMITS_RAD[idx.shoulder_flex, 1]

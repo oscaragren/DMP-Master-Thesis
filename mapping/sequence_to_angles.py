@@ -81,7 +81,9 @@ def save_angles_for_trial(trial_dir: Path) -> tuple[np.ndarray, np.ndarray]:
     elbow_rad, shoulder_rad = sequence_to_angles_rad(seq)
     elbow_deg = np.degrees(elbow_rad)
     shoulder_deg = np.degrees(shoulder_rad)
-    out_path = trial_dir / "angles.npz"
+    from vis.trial_naming import trial_prefix
+
+    out_path = trial_dir / f"{trial_prefix(trial_dir)}angles.npz"
     # Save both radians (canonical) and degrees (for backwards compatibility / plotting).
     np.savez(
         out_path,

@@ -31,46 +31,8 @@ _project_root = _sim_dir.parent
 if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
-from dmp.dmp import fit, rollout_simple
-from kinematics.joint_dynamics import smooth_angles_deg
-from vis.plot_dmp_trajectory import load_angles_demo
+from dmp.trajectory_io import load_dmp_trajectory
 from sim.joint_limits import clamp_dmp_vector
-
-
-def load_dmp_trajectory(trial_dir: Path) -> tuple[np.ndarray, float]:
-    """
-    Fit a DMP on a demo from angles.npz in `trial_dir` and rollout a trajectory.
-
-    Returns:
-        q_rad: (T, 4) numpy array, joint angles in radians
-        dt:   timestep used for the rollout (seconds, normalized time)
-    """
-    # load_angles_demo now gives radians (with deg fallback).
-    q_demo = load_angles_demo(trial_dir)  # (T, 4), elbow + 3 shoulder DOFs
-    # Smooth via degrees then convert back to radians for consistency.
-    q_demo = np.deg2rad(smooth_angles_deg(np.degrees(q_demo)))
-
-    T, n_joints = q_demo.shape
-    if n_joints != 4:
-        raise ValueError(f"Expected 4-DOF demo, got shape {q_demo.shape}")
-
-    tau = 1.0
-    dt = tau / (T - 1)
-
-    model = fit(
-        [q_demo],
-        tau=tau,
-        dt=dt,
-        n_basis_functions=15,
-        alpha_canonical=4.0,
-        alpha_transformation=25.0,
-        beta_transformation=6.25,
-    )
-
-    q_gen = rollout_simple(model, q_demo[0], q_demo[-1], tau=tau, dt=dt)
-    # Clamp DMP rollout to robot joint limits (radians) before playback.
-    q_gen = clamp_dmp_vector(q_gen)
-    return q_gen, dt
 
 
 def joint_index(body_uid: int, joint_name: str) -> int:
@@ -122,6 +84,7 @@ def main() -> None:
 
     # 1. Load DMP trajectory (elbow + 3 shoulder DOFs)
     q_traj, dt = load_dmp_trajectory(trial_dir)  # (T, 4), radians
+    q_traj = clamp_dmp_vector(q_traj)
     T, n_joints = q_traj.shape
 
     # 2. Connect PyBullet and load InMoov URDF
