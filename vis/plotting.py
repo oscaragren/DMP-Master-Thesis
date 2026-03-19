@@ -13,6 +13,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 from mpl_toolkits.mplot3d import Axes3D
+from scipy.signal import savgol_filter
 
 from capture.clean_keypoints import LEFT_ARM_SEQ_CLEANED, LEFT_ARM_T_CLEANED
 from dmp.dmp import fit, rollout_simple
@@ -599,7 +600,7 @@ def load_angles_demo(trial_dir: Path, source: str = "auto") -> np.ndarray:
 def plot_dmp_trajectory(trial_dir: Path, out_path: Path, n_basis: int = 15, angles_source: str = "auto") -> None:
     """Fit DMP from trial angles, rollout, and plot demo vs generated."""
     q_demo = load_angles_demo(trial_dir, source=angles_source)
-    q_demo = np.deg2rad(smooth_angles_deg(np.degrees(q_demo)))
+    #q_demo = np.deg2rad(smooth_angles_deg(np.degrees(q_demo)))
 
     T = q_demo.shape[0]
     tau = 1.0
@@ -618,6 +619,167 @@ def plot_dmp_trajectory(trial_dir: Path, out_path: Path, n_basis: int = 15, angl
     print(report.reason)
 
     plot_dmp_single(q_demo, q_gen, _load_meta(trial_dir), out_path, title_suffix=f"{angles_source}, n_basis={n_basis}")
+
+
+def plot_dmp_forcing_fit_single_joint(
+    q_demo: np.ndarray,
+    joint_idx: int,
+    out_path: Path,
+    *,
+    n_basis: int = 30,
+    tau: float = 1.0,
+    alpha_canonical: float = 4.0,
+    alpha_transformation: float = 25.0,
+    beta_transformation: float = 6.25,
+    derivative_method: str = "gradient",
+    savgol_window_length: int = 11,
+    savgol_polyorder: int = 3,
+    meta: dict | None = None,
+    title_suffix: str = "",
+) -> None:
+    """
+    Plot DMP forcing-term target vs fitted forcing for one joint.
+
+    q_demo: (T, n_joints) in radians.
+    joint_idx: index of the joint to visualize.
+    """
+    if q_demo.ndim != 2:
+        raise ValueError(f"Expected q_demo shape (T, n_joints), got {q_demo.shape}")
+    if not (0 <= joint_idx < q_demo.shape[1]):
+        raise ValueError(f"joint_idx={joint_idx} out of bounds for q_demo with {q_demo.shape[1]} joints")
+    if q_demo.shape[0] < 5:
+        raise ValueError(f"Need at least 5 samples, got {q_demo.shape[0]}")
+
+    T = q_demo.shape[0]
+    dt = tau / (T - 1)
+    model = fit(
+        [q_demo],
+        tau=tau,
+        dt=dt,
+        n_basis_functions=n_basis,
+        alpha_canonical=alpha_canonical,
+        alpha_transformation=alpha_transformation,
+        beta_transformation=beta_transformation,
+    )
+
+    qj = q_demo[:, joint_idx]
+    method = derivative_method.strip().lower()
+    if method == "savgol":
+        wl = int(savgol_window_length)
+        po = int(savgol_polyorder)
+        if wl < 3:
+            wl = 3
+        if wl > T:
+            wl = T
+        if wl % 2 == 0:
+            wl -= 1
+        if wl < 3:
+            wl = 3 if T >= 3 else T
+        if po >= wl:
+            po = wl - 1
+        if po < 1:
+            po = 1
+        y_smooth = savgol_filter(qj, window_length=wl, polyorder=po, mode="interp")
+        dq = savgol_filter(y_smooth, window_length=wl, polyorder=po, deriv=1, delta=dt, mode="interp")
+        ddq = savgol_filter(y_smooth, window_length=wl, polyorder=po, deriv=2, delta=dt, mode="interp")
+    elif method == "gradient":
+        dq = np.gradient(qj, dt)
+        ddq = np.gradient(dq, dt)
+    else:
+        raise ValueError(
+            f"Unknown derivative_method '{derivative_method}'. Use 'gradient' or 'savgol'."
+        )
+    q0 = float(qj[0])
+    g = float(qj[-1])
+    scale = g - q0
+    if abs(scale) < 1e-9:
+        scale = 1.0
+
+    f_target = (
+        tau**2 * ddq
+        - alpha_transformation * beta_transformation * (g - qj)
+        + alpha_transformation * dq
+    ) / scale
+
+    t = np.linspace(0.0, tau, T)
+    x = np.exp(-alpha_canonical * t / tau)
+    psi = np.exp(-model.widths[None, :] * (x[:, None] - model.centers[None, :]) ** 2)
+    psi_norm = psi / (psi.sum(axis=1, keepdims=True) + 1e-10)
+    f_fit = psi_norm @ model.weights[joint_idx, :]
+
+    rmse = float(np.sqrt(np.mean((f_target - f_fit) ** 2)))
+    denom = float(np.sum((f_target - np.mean(f_target)) ** 2))
+    r2 = 1.0 - float(np.sum((f_target - f_fit) ** 2)) / (denom + 1e-12)
+
+    joint_names = [
+        "Elbow flexion",
+        "Shoulder flexion",
+        "Shoulder abduction",
+        "Shoulder internal rotation",
+    ]
+    joint_label = joint_names[joint_idx] if joint_idx < len(joint_names) else f"joint {joint_idx}"
+
+    fig, axes = plt.subplots(2, 1, figsize=(10, 7), sharex=True)
+
+    ax = axes[0]
+    ax.plot(t, f_target, color="#2c3e50", linewidth=1.5, label="Target f")
+    ax.plot(t, f_fit, color="#e67e22", linestyle="--", linewidth=1.5, label="Fitted f")
+    ax.set_ylabel("Forcing term")
+    ax.set_title(f"Time domain — {joint_label}")
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc="upper right")
+
+    ax = axes[1]
+    ax.plot(x, f_target, color="#2c3e50", linewidth=1.4, label="Target f")
+    ax.plot(x, f_fit, color="#e67e22", linestyle="--", linewidth=1.4, label="Fitted f")
+    ax.set_xlabel("Phase x")
+    ax.set_ylabel("Forcing term")
+    ax.set_title(f"Phase domain (RMSE={rmse:.4f}, R2={r2:.4f})")
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc="upper right")
+
+    m = meta or {}
+    subject = m.get("subject", "?")
+    motion = m.get("motion", "?")
+    trial = m.get("trial", "?")
+    suffix = f" ({title_suffix})" if title_suffix else ""
+    fig.suptitle(
+        f"DMP forcing fit — subject {subject}, {motion}, trial {trial}, {joint_label}, n_basis={n_basis}{suffix}",
+        fontsize=11,
+    )
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=140)
+    plt.close(fig)
+
+
+def plot_dmp_forcing_fit_from_trial(
+    trial_dir: Path,
+    *,
+    out_path: Path | None = None,
+    joint_idx: int = 1,
+    n_basis: int = 30,
+    angles_source: str = "auto",
+    derivative_method: str = "gradient",
+    savgol_window_length: int = 11,
+    savgol_polyorder: int = 3,
+) -> Path:
+    """Load trial angles and plot DMP target-vs-fit forcing for one joint."""
+    q_demo = load_angles_demo(trial_dir, source=angles_source)
+    meta = _load_meta(trial_dir)
+    if out_path is None:
+        out_path = trial_dir / f"{trial_prefix(trial_dir)}dmp_forcing_fit_joint{joint_idx}_n{n_basis}.png"
+    plot_dmp_forcing_fit_single_joint(
+        q_demo,
+        joint_idx,
+        out_path,
+        n_basis=n_basis,
+        derivative_method=derivative_method,
+        savgol_window_length=savgol_window_length,
+        savgol_polyorder=savgol_polyorder,
+        meta=meta,
+        title_suffix=angles_source,
+    )
+    return out_path
 
 
 KEYPOINT_NAMES = ["left_shoulder", "left_elbow", "left_wrist"]
@@ -656,7 +818,7 @@ def plot_3d_trajectory(seq: np.ndarray, t: np.ndarray, meta: dict, out_path: Pat
             ax1.plot(
                 seq[valid, k, 0],
                 seq[valid, k, 2],
-                seq[valid, k, 1],
+                -seq[valid, k, 1],
                 color=colors[k % len(colors)],
                 label=names[k] if k < len(names) else f"kp{k}",
                 alpha=0.8,
@@ -670,12 +832,12 @@ def plot_3d_trajectory(seq: np.ndarray, t: np.ndarray, meta: dict, out_path: Pat
             p0 = seq[ti, j]
             p1 = seq[ti, j + 1]
             if np.all(np.isfinite(p0)) and np.all(np.isfinite(p1)):
-                ax1.plot([p0[0], p1[0]], [p0[2], p1[2]], [p0[1], p1[1]], "k-", alpha=alpha, linewidth=2)
+                ax1.plot([p0[0], p1[0]], [p0[2], p1[2]], [-p0[1], -p1[1]], "k-", alpha=alpha, linewidth=2)
     ax1.set_xlabel("x (m)")
     ax1.set_ylabel("z (m)")
-    ax1.set_zlabel("y (m)")
+    ax1.set_zlabel("up (m)")
     ax1.legend()
-    ax1.set_title("3D trajectory (camera frame)")
+    ax1.set_title("3D trajectory (physically up frame)")
     set_axes_equal(ax1)
 
     ax2 = fig.add_subplot(122)
@@ -684,7 +846,7 @@ def plot_3d_trajectory(seq: np.ndarray, t: np.ndarray, meta: dict, out_path: Pat
         name = names[k] if k < len(names) else f"kp{k}"
         if np.any(valid):
             ax2.plot(t[valid], seq[valid, k, 0], color=colors[k % len(colors)], alpha=0.8, linestyle="-", label=f"{name} x")
-            ax2.plot(t[valid], seq[valid, k, 1], color=colors[k % len(colors)], alpha=0.8, linestyle="--", label=f"{name} y")
+            ax2.plot(t[valid], -seq[valid, k, 1], color=colors[k % len(colors)], alpha=0.8, linestyle="--", label=f"{name} up")
             ax2.plot(t[valid], seq[valid, k, 2], color=colors[k % len(colors)], alpha=0.8, linestyle=":", label=f"{name} z")
     ax2.set_xlabel("time (s)")
     ax2.set_ylabel("position (m)")

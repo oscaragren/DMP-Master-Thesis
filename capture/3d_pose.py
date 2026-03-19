@@ -330,6 +330,15 @@ def main():
         "keypoint_names": list(POSE_KEYPOINT_NAMES.values()),
         "source": "3d_pose.py (OAK-D live)",
         "record_duration_sec": RECORD_DURATION,
+        "pose_model": {
+            "framework": "MediaPipe Pose Landmarker (Tasks API)",
+            "model_asset_path": str(args.model),
+            "running_mode": "VIDEO",
+            "num_poses": 1,
+            "min_pose_detection_confidence": 0.5,
+            "min_pose_presence_confidence": 0.5,
+            "min_tracking_confidence": 0.5,
+        },
     }
     if (outdir / "video.mp4").exists():
         meta["video"] = "video.mp4"

@@ -45,11 +45,12 @@ import numpy as np
 
 from capture.clean_keypoints import run_clean_left_arm_sequence, LEFT_ARM_SEQ_CLEANED, LEFT_ARM_T_CLEANED
 from dmp.dmp import fit, rollout_simple
-from kinematics.joint_dynamics import smooth_angles_deg, validate_joint_trajectory_deg
+from kinematics.clean_angles import clean_angles_trajectory
 from mapping.sequence_to_angles import sequence_to_angles_rad
 from vis.plotting import (
     plot_angles_overlay_grid,
     plot_angles_single,
+    plot_3d_trajectory,
     plot_dmp_order_basis_grids_per_joint,
     plot_dmp_overlay_grid,
     plot_dmp_single,
@@ -76,7 +77,10 @@ def _load_raw_seq_t(trial_dir: Path) -> tuple[np.ndarray, np.ndarray]:
     t = np.load(t_path) if t_path.exists() else np.arange(seq.shape[0], dtype=np.float64)
     if t.ndim != 1 or len(t) != seq.shape[0]:
         t = np.arange(seq.shape[0], dtype=np.float64)
-    return seq, t.astype(np.float64, copy=False)
+    t = t.astype(np.float64, copy=False)
+    if t.size > 0:
+        t = t - t[0]
+    return seq, t
 
 
 def _load_clean_seq_t(trial_dir: Path) -> tuple[np.ndarray, np.ndarray]:
@@ -90,7 +94,10 @@ def _load_clean_seq_t(trial_dir: Path) -> tuple[np.ndarray, np.ndarray]:
     t = np.load(t_path) if t_path.exists() else np.arange(seq.shape[0], dtype=np.float64)
     if t.ndim != 1 or len(t) != seq.shape[0]:
         t = np.arange(seq.shape[0], dtype=np.float64)
-    return seq, t.astype(np.float64, copy=False)
+    t = t.astype(np.float64, copy=False)
+    if t.size > 0:
+        t = t - t[0]
+    return seq, t
 
 
 def _save_angles_npz(out_npz: Path, elbow_rad: np.ndarray, shoulder_rad: np.ndarray) -> None:
@@ -106,7 +113,7 @@ def _save_angles_npz(out_npz: Path, elbow_rad: np.ndarray, shoulder_rad: np.ndar
 def _fit_rollout_dmp(q_demo: np.ndarray, n_basis: int) -> tuple[np.ndarray, np.ndarray, float, object]:
     """Return (q_demo_smoothed_rad, q_gen_rad, dt, model)."""
     # Smooth demonstrated angles before fitting / finite‑difference derivatives.
-    q_demo = np.deg2rad(smooth_angles_deg(np.degrees(q_demo), method="savgol"))
+    #q_demo = np.deg2rad(smooth_angles_deg(np.degrees(q_demo), method="savgol"))
     T = q_demo.shape[0]
     tau = 1.0
     dt = tau / (T - 1)
@@ -160,6 +167,7 @@ def run_full_pipeline(
     clean_target_dt: float | None = 0.04,
     filter_orders: list[int] | None = None,
     n_basis_list: list[int] | None = None,
+    use_keypoint_cleaning: bool = False,
 ) -> None:
     """Run RAW vs CLEAN sweep pipeline for a single trial directory."""
     if not trial_dir.exists():
@@ -173,6 +181,7 @@ def run_full_pipeline(
     print(f"Running RAW/CLEAN sweep pipeline for trial: {trial_dir}")
     print(f"  filter_orders: {filter_orders}")
     print(f"  n_basis_list:  {n_basis_list}")
+    print(f"  clean_mode:    {'keypoints' if use_keypoint_cleaning else 'angles'}")
 
     generated_files: list[Path] = []
 
@@ -182,6 +191,10 @@ def run_full_pipeline(
     # --- RAW: map to angles + plots ---
     print("RAW: loading sequence...")
     raw_seq, raw_t = _load_raw_seq_t(trial_dir)
+    print("RAW: plotting keypoint trajectories (3D + position vs time)...")
+    raw_keypoints_fig = out("keypoints_raw_trajectory.png")
+    plot_3d_trajectory(raw_seq, raw_t, meta, raw_keypoints_fig)
+    generated_files.append(raw_keypoints_fig)
     print("RAW: mapping sequence to joint angles...")
     raw_elbow_rad, raw_shoulder_rad = sequence_to_angles_rad(raw_seq)
     raw_angles_npz = out("angles_raw.npz")
@@ -196,16 +209,27 @@ def run_full_pipeline(
     # --- CLEAN variants: sweep filter_order ---
     clean_variants: list[tuple[int, np.ndarray, np.ndarray, np.ndarray]] = []
     for order in filter_orders:
-        print(f"CLEAN(o{order}): cleaning keypoint sequence...")
-        run_clean_left_arm_sequence(
-            trial_dir,
-            cutoff_hz=clean_cutoff_hz,
-            filter_order=order,
-            target_dt=clean_target_dt,
-        )
-        clean_seq, clean_t = _load_clean_seq_t(trial_dir)
-        print(f"CLEAN(o{order}): mapping sequence to joint angles...")
-        elbow_rad, shoulder_rad = sequence_to_angles_rad(clean_seq)
+        if use_keypoint_cleaning:
+            print(f"CLEAN(o{order}): cleaning keypoint sequence...")
+            run_clean_left_arm_sequence(
+                trial_dir,
+                cutoff_hz=clean_cutoff_hz,
+                filter_order=order,
+                target_dt=clean_target_dt,
+            )
+            clean_seq, clean_t = _load_clean_seq_t(trial_dir)
+            print(f"CLEAN(o{order}): mapping sequence to joint angles...")
+            elbow_rad, shoulder_rad = sequence_to_angles_rad(clean_seq)
+        else:
+            print(f"CLEAN(o{order}): cleaning in joint-angle space...")
+            elbow_rad, shoulder_rad, clean_t = clean_angles_trajectory(
+                raw_elbow_rad,
+                raw_shoulder_rad,
+                raw_t,
+                cutoff_hz=clean_cutoff_hz,
+                filter_order=order,
+                target_dt=clean_target_dt,
+            )
         clean_variants.append((order, elbow_rad, shoulder_rad, clean_t))
 
         clean_angles_npz = out(f"angles_clean_o{order}.npz")
@@ -350,6 +374,11 @@ def main() -> None:
         default=[10, 30, 60],
         help="Basis function counts to sweep for DMP (default: 10 30 60)",
     )
+    parser.add_argument(
+        "--use-keypoint-cleaning",
+        action="store_true",
+        help="Use capture/clean_keypoints.py logic (clean in keypoint space before angle mapping).",
+    )
     args = parser.parse_args()
 
     if args.path is not None:
@@ -364,6 +393,7 @@ def main() -> None:
         clean_target_dt=clean_dt,
         filter_orders=list(args.filter_orders),
         n_basis_list=list(args.n_basis),
+        use_keypoint_cleaning=bool(args.use_keypoint_cleaning),
     )
 
 

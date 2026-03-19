@@ -156,7 +156,7 @@ def load_dmp_trajectory(
                 return _load_rollout_npz(pth)
 
     q_demo = load_angles_demo(trial_dir, source="auto")
-    q_demo = np.deg2rad(smooth_angles_deg(np.degrees(q_demo)))
+    #q_demo = np.deg2rad(smooth_angles_deg(np.degrees(q_demo)))
 
     T, n = q_demo.shape
     if n != 4:
