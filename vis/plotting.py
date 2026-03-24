@@ -13,10 +13,15 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 from mpl_toolkits.mplot3d import Axes3D
-from scipy.signal import savgol_filter
 
 from capture.clean_keypoints import LEFT_ARM_SEQ_CLEANED, LEFT_ARM_T_CLEANED
-from dmp.dmp import fit, rollout_simple
+from dmp.dmp import (
+    DMPModel,
+    estimate_derivatives,
+    fit,
+    rollout_simple,
+    canonical_phase,
+)
 from kinematics.joint_dynamics import smooth_angles_deg, validate_joint_trajectory_deg
 from mapping.sequence_to_angles import sequence_to_angles_rad
 from vis.trial_naming import trial_prefix
@@ -621,6 +626,54 @@ def plot_dmp_trajectory(trial_dir: Path, out_path: Path, n_basis: int = 15, angl
     plot_dmp_single(q_demo, q_gen, _load_meta(trial_dir), out_path, title_suffix=f"{angles_source}, n_basis={n_basis}")
 
 
+def forcing_target_from_trajectory(
+    q: np.ndarray,
+    *,
+    tau: float,
+    dt: float,
+    alpha_transformation: float,
+    beta_transformation: float,
+    diff_g_q0_eps: float = 1e-6,
+    derivative_method: str = "savgol",
+    savgol_window_length: int = 11,
+    savgol_polyorder: int = 3,
+) -> np.ndarray:
+    """Compute f_target(t) for one joint trajectory."""
+    y = np.asarray(q, dtype=float)
+    if y.ndim != 1:
+        raise ValueError(f"Expected q to be 1D, got shape {y.shape}")
+    if y.size < 3:
+        raise ValueError("Need at least 3 samples to compute forcing.")
+
+    dq, ddq = estimate_derivatives(
+        y,
+        dt=dt,
+        derivative_method=derivative_method,
+        savgol_window_length=savgol_window_length,
+        savgol_polyorder=savgol_polyorder,
+    )
+
+    q0 = float(y[0])
+    g = float(y[-1])
+    scale = g - q0
+    if abs(scale) < diff_g_q0_eps:
+        scale = 1.0
+
+    return (
+        tau**2 * ddq
+        - alpha_transformation * beta_transformation * (g - y)
+        + alpha_transformation * dq
+    ) / scale
+
+
+def forcing_fit_from_phase(model: DMPModel, x: np.ndarray) -> np.ndarray:
+    """Compute fitted forcing f(x) from a learned DMP model."""
+    x_arr = np.atleast_1d(np.asarray(x, dtype=float))
+    psi = np.exp(-model.widths[None, :] * (x_arr[:, None] - model.centers[None, :]) ** 2)
+    psi_norm = psi / (psi.sum(axis=1, keepdims=True) + 1e-10)
+    return x_arr[:, None] * (psi_norm @ model.weights.T)
+
+
 def plot_dmp_forcing_fit_single_joint(
     q_demo: np.ndarray,
     joint_idx: int,
@@ -650,12 +703,12 @@ def plot_dmp_forcing_fit_single_joint(
     if q_demo.shape[0] < 5:
         raise ValueError(f"Need at least 5 samples, got {q_demo.shape[0]}")
 
-    T = q_demo.shape[0]
-    dt = tau / (T - 1)
+    T = int(q_demo.shape[0])
+    dt_eff = tau / (T - 1)
     model = fit(
         [q_demo],
         tau=tau,
-        dt=dt,
+        dt=dt_eff,
         n_basis_functions=n_basis,
         alpha_canonical=alpha_canonical,
         alpha_transformation=alpha_transformation,
@@ -663,49 +716,22 @@ def plot_dmp_forcing_fit_single_joint(
     )
 
     qj = q_demo[:, joint_idx]
-    method = derivative_method.strip().lower()
-    if method == "savgol":
-        wl = int(savgol_window_length)
-        po = int(savgol_polyorder)
-        if wl < 3:
-            wl = 3
-        if wl > T:
-            wl = T
-        if wl % 2 == 0:
-            wl -= 1
-        if wl < 3:
-            wl = 3 if T >= 3 else T
-        if po >= wl:
-            po = wl - 1
-        if po < 1:
-            po = 1
-        y_smooth = savgol_filter(qj, window_length=wl, polyorder=po, mode="interp")
-        dq = savgol_filter(y_smooth, window_length=wl, polyorder=po, deriv=1, delta=dt, mode="interp")
-        ddq = savgol_filter(y_smooth, window_length=wl, polyorder=po, deriv=2, delta=dt, mode="interp")
-    elif method == "gradient":
-        dq = np.gradient(qj, dt)
-        ddq = np.gradient(dq, dt)
-    else:
-        raise ValueError(
-            f"Unknown derivative_method '{derivative_method}'. Use 'gradient' or 'savgol'."
-        )
-    q0 = float(qj[0])
-    g = float(qj[-1])
-    scale = g - q0
-    if abs(scale) < 1e-9:
-        scale = 1.0
+    t = np.arange(T, dtype=np.float64) * dt_eff
+    x = canonical_phase(t, tau=tau, alpha_canonical=alpha_canonical)
 
-    f_target = (
-        tau**2 * ddq
-        - alpha_transformation * beta_transformation * (g - qj)
-        + alpha_transformation * dq
-    ) / scale
+    f_target = forcing_target_from_trajectory(
+        qj,
+        tau=tau,
+        dt=dt_eff,
+        alpha_transformation=alpha_transformation,
+        beta_transformation=beta_transformation,
+        diff_g_q0_eps=1e-6,
+        derivative_method=derivative_method,
+        savgol_window_length=savgol_window_length,
+        savgol_polyorder=savgol_polyorder,
+    )
 
-    t = np.linspace(0.0, tau, T)
-    x = np.exp(-alpha_canonical * t / tau)
-    psi = np.exp(-model.widths[None, :] * (x[:, None] - model.centers[None, :]) ** 2)
-    psi_norm = psi / (psi.sum(axis=1, keepdims=True) + 1e-10)
-    f_fit = psi_norm @ model.weights[joint_idx, :]
+    f_fit = forcing_fit_from_phase(model, x)[:, joint_idx]
 
     rmse = float(np.sqrt(np.mean((f_target - f_fit) ** 2)))
     denom = float(np.sum((f_target - np.mean(f_target)) ** 2))

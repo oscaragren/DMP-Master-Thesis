@@ -2,7 +2,7 @@ from dataclasses import dataclass
 import numpy as np
 from typing import List
 
-from .integration import rk4_integrate_ode
+from scipy.signal import savgol_filter
 
 """
 NOTE:
@@ -12,85 +12,319 @@ If your demos have different lengths, resample each to the same number of steps 
 
 @dataclass
 class DMPModel:
-    """Everything needed to rollout a DMP and compute coupling features"""
-    weights: np.ndarray # shape: (n_joints, n_basis_functions)
-    centers: np.ndarray # shape: (n_basis_functions,) in phase
-    widths: np.ndarray # shape: (n_basis_functions,)
+    """Parameters required for DMP rollouts and forcing reconstruction."""
+    weights: np.ndarray  # shape: (n_joints, n_basis_functions)
+    centers: np.ndarray  # shape: (n_basis_functions,) in phase
+    widths: np.ndarray  # shape: (n_basis_functions,)
     alpha_canonical: float
     alpha_transformation: float
     beta_transformation: float
     tau: float
     n_joints: int
 
+
 def _rbf_normalized(x: np.ndarray, centers: np.ndarray, widths: np.ndarray) -> np.ndarray:
-    """Compute RBFs normalized to sum to 1"""
+    """Compute Gaussian RBF activations normalized row-wise."""
     psi = np.exp(-widths * (x[:, None] - centers[None, :]) ** 2)
     return psi / (psi.sum(axis=1, keepdims=True) + 1e-10)
 
-def fit(demos: List[np.ndarray],
-        tau: float,
-        dt: float,
-        n_basis_functions: int,
-        alpha_canonical: float,
-        alpha_transformation: float,
-        beta_transformation: float) -> DMPModel:
-    """
-    fit a DMP from a list of joints trajectories. Each demo is (T, 5)
-    Uses same tau for all; if demos have different lengths, they are resampled to the same T
-    """
 
-    # Stack and use one nominal duration.
+def _validate_and_get_demo_shape(demos: List[np.ndarray]) -> tuple[int, int]:
+    """Validate demos list and return (T_demo, n_joints)."""
+    if not demos:
+        raise ValueError("demos must be a non-empty list")
+    if demos[0].ndim != 2:
+        raise ValueError(f"demos[0] must be 2D (T, n_joints), got shape {demos[0].shape}")
+
+    T_demo = int(demos[0].shape[0])
+    n_joints = int(demos[0].shape[1])
+    for i, q in enumerate(demos):
+        if q.ndim != 2:
+            raise ValueError(f"demos[{i}] must be 2D (T, n_joints), got shape {q.shape}")
+        if q.shape[1] != n_joints:
+            raise ValueError(f"demos[{i}] has n_joints={q.shape[1]}, expected {n_joints}")
+        if q.shape[0] != T_demo:
+            raise ValueError(
+                "All demos must have the same length before calling fit "
+                f"(got demos[0].shape[0]={T_demo} but demos[{i}].shape[0]={q.shape[0]})."
+            )
+    return T_demo, n_joints
+
+def _centers_and_widths(alpha_canonical: float, n_basis_functions: int) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Build phase-space RBF centers and widths used by fit.
+    """
+    centers = np.exp(-np.linspace(0, 1, n_basis_functions) * alpha_canonical)  # 1 -> ~0
+    if n_basis_functions <= 1:
+        widths = np.array([1.0], dtype=np.float64)
+    else:
+        widths = np.diff(centers)
+        widths = np.hstack((widths, [widths[-1]]))
+    return centers, widths
+
+
+def savgol_estimation(
+    q: np.ndarray,
+    *,
+    dt: float,
+    savgol_window_length: int = 11,
+    savgol_polyorder: int = 3,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Estimate dq and ddq using a Savitzky-Golay smoothing + derivative pass.
+
+    Falls back to gradient-based derivatives when there are too few points
+    for a valid Savitzky-Golay setup.
+    """
+    y = np.asarray(q, dtype=float)
+    T = y.size
+
+    wl = min(int(savgol_window_length), T if T % 2 == 1 else T - 1)
+    if wl < 3:
+        dq = np.gradient(y, dt)
+        ddq = np.gradient(dq, dt)
+        return dq, ddq
+    if wl % 2 == 0:
+        wl -= 1
+    if wl < 3:
+        dq = np.gradient(y, dt)
+        ddq = np.gradient(dq, dt)
+        return dq, ddq
+
+    po = int(savgol_polyorder)
+    if po >= wl:
+        po = wl - 1
+    if po < 1:
+        po = 1
+
+    y_smooth = savgol_filter(y, window_length=wl, polyorder=po, mode="interp")
+    dq = savgol_filter(y_smooth, window_length=wl, polyorder=po, deriv=1, delta=dt, mode="interp")
+    ddq = savgol_filter(y_smooth, window_length=wl, polyorder=po, deriv=2, delta=dt, mode="interp")
+    return dq, ddq
+
+def estimate_derivatives(
+    q: np.ndarray,
+    *,
+    dt: float,
+    derivative_method: str = "savgol",
+    savgol_window_length: int = 11,
+    savgol_polyorder: int = 3,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Estimate dq and ddq from a 1D trajectory q(t). 
+    This is used to compute the forcing term for each joint in the transformation system.
     
-    T = demos[0].shape[0]
-    t = np.arange(T) * dt
-    x = np.exp(-alpha_canonical * t / tau) # Canonical system, phase 1 -> 0
+    Args:
+        q: np.ndarray: the trajectory
+        dt: float: the time step
+        derivative_method: str: the method to use for derivative estimation
+        savgol_window_length: int: the window length for Savitzky-Golay filter
+        savgol_polyorder: int: the polynomial order for Savitzky-Golay filter
 
-    # RBF centers in phase (exponentially spaced so more near 1)
-    centers = np.exp(-np.linspace(0, 1, n_basis_functions)*alpha_canonical) # 1 to ~0
-    widths = np.ones(n_basis_functions) * (n_basis_functions ** 1.5) / (centers.max() - centers.min() + 1e-10) # Wide at edges, narrow in middle
+    Returns:
+        tuple[np.ndarray, np.ndarray]: the estimated dq and ddq
+    """
+    # 1. Convert the trajectory to a numpy array
+    q = np.asarray(q, dtype=float)
+    if q.ndim != 1:
+        raise ValueError(f"Expected 1D q, got shape {q.shape}")
+    if q.size < 3: # Not enough samples to do a proper Savitzky-Golay estimate.
+        dq = np.gradient(q, dt)
+        ddq = np.gradient(dq, dt)
+        return dq, ddq
 
-    # For each joint, collect target f from all demos and solves for weights.
-    n_joints = demos[0].shape[1]
-    weights = np.zeros((n_joints, n_basis_functions))
+    # 2. Get the method to use for derivative estimation
+    method = derivative_method.strip().lower()
+
+    # 3. Estimate the derivatives using gradient method if specified
+    if method == "gradient":
+        dq = np.gradient(q, dt)
+        ddq = np.gradient(dq, dt)
+        return dq, ddq
+
+    if method != "savgol":
+        raise ValueError(f"Unknown derivative_method '{derivative_method}'. Use 'gradient' or 'savgol'.")
+
+    # 4. Estimate derivatives using Savitzky-Golay helper.
+    return savgol_estimation(
+        q,
+        dt=dt,
+        savgol_window_length=savgol_window_length,
+        savgol_polyorder=savgol_polyorder,
+    )
+
+def _compute_f_target(
+    q_joint: np.ndarray,
+    *,
+    tau: float,
+    dt: float,
+    alpha_transformation: float,
+    beta_transformation: float,
+    diff_g_q0_eps: float,
+    savgol_window_length: int,
+    savgol_polyorder: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, float, float]:
+    """
+    Compute DMP forcing target for one joint plus diagnostics.
+
+    Returns:
+        f_target, dq, ddq, q0_joint, g_joint, g_minus_q0
+    """
+    dq, ddq = estimate_derivatives(
+        q_joint,
+        dt=dt,
+        derivative_method="savgol",
+        savgol_window_length=savgol_window_length,
+        savgol_polyorder=savgol_polyorder,
+    )
+
+    q0_joint = float(q_joint[0])
+    g_joint = float(q_joint[-1])
+    g_minus_q0 = g_joint - q0_joint
+    scale = 1.0 if abs(g_minus_q0) < diff_g_q0_eps else g_minus_q0
+
+    f_target = (
+        tau**2 * ddq
+        - alpha_transformation * beta_transformation * (g_joint - q_joint)
+        + alpha_transformation * dq
+    ) / scale
+    return f_target, dq, ddq, q0_joint, g_joint, g_minus_q0
+
+def _solve_lwr_weights(
+    *,
+    demos: List[np.ndarray],
+    phi: np.ndarray,
+    n_joints: int,
+    n_basis_functions: int,
+    tau: float,
+    dt: float,
+    alpha_transformation: float,
+    beta_transformation: float,
+    ridge_lambda: float,
+    diff_g_q0_eps: float,
+    savgol_window_length: int,
+    savgol_polyorder: int,
+) -> np.ndarray:
+    """
+    Solve DMP weights with an LWR-style normal-equation solve.
+
+    For each joint, it solves:
+        (Phi^T Phi + lambda I) w = Phi^T f_target
+    aggregated across all demos.
+    """
+    n_demos = len(demos)
+    # Phi is shared across demos, so A is the same per demo and can be scaled once.
+    A = n_demos * (phi.T @ phi)
+    A_reg = A + ridge_lambda * np.eye(n_basis_functions, dtype=np.float64)
+
+    weights = np.zeros((n_joints, n_basis_functions), dtype=np.float64)
 
     for joint in range(n_joints):
-        phi_list = []
-        f_list = []
+        # b = sum_d Phi^T f_target_d
+        b = np.zeros((n_basis_functions,), dtype=np.float64)
+        for demo_idx, q in enumerate(demos):
+            q_joint = q[:, joint]
+            (
+                f_target,
+                dq,
+                ddq,
+                q0_joint,
+                g_joint,
+                g_minus_q0,
+            ) = _compute_f_target(
+                q_joint,
+                tau=tau,
+                dt=dt,
+                alpha_transformation=alpha_transformation,
+                beta_transformation=beta_transformation,
+                diff_g_q0_eps=diff_g_q0_eps,
+                savgol_window_length=savgol_window_length,
+                savgol_polyorder=savgol_polyorder,
+            )
 
-        for q in demos:
-            dq = np.gradient(q[:, joint], dt) # angular velocity
-            ddq = np.gradient(dq, dt) # angular acceleration
+            if demo_idx == 0:
+                # Debug print for the first demo to inspect derivative/scale magnitudes.
+                print(
+                    f"[dmp.fit] demo0 joint={joint} "
+                    f"q0={q0_joint:.6g} g={g_joint:.6g} "
+                    f"g-q0={g_minus_q0:.6g} |g-q0|={abs(g_minus_q0):.6g} "
+                    f"max_dq={np.nanmax(dq):.6g} max_ddq={np.nanmax(ddq):.6g} "
+                    f"max_abs_dq={np.nanmax(np.abs(dq)):.6g} max_abs_ddq={np.nanmax(np.abs(ddq)):.6g}"
+                )
 
-            q0_joint = q[0, joint]
-            g_joint = q[-1, joint]
-            diff_g_q0 = g_joint - q0_joint
-            if np.abs(diff_g_q0) < 1e-9:
-                diff_g_q0 = 1.0 # Avoid division by zero
+            b += phi.T @ f_target
 
-            # Target forcing term
-            f_target = (tau**2 * ddq - alpha_transformation * beta_transformation * (g_joint - q[:, joint]) + alpha_transformation * dq) / diff_g_q0
-            phi = _rbf_normalized(x, centers, widths) # Shape: (T, n_basis_functions)
-            phi_list.append(phi)
-            f_list.append(f_target)
+        weights[joint, :] = np.linalg.solve(A_reg, b)
 
-        phi_all = np.vstack(phi_list) 
-        f_all = np.concatenate(f_list) 
+    return weights
 
-        # Least squares: phi_all @ w = f_all
-        w, *_ = np.linalg.lstsq(phi_all, f_all, rcond=None)
-        weights[joint, :] = w
+def canonical_phase(t: np.ndarray, *, tau: float, alpha_canonical: float) -> np.ndarray:
+    """Canonical DMP phase variable x(t) = exp(-alpha * t / tau)."""
+    t = np.asarray(t, dtype=float)
+    return np.exp(-alpha_canonical * t / tau)
 
-    #q0_fit = np.array([demos[0][0, joint] for joint in range(n_joints)])
-    #g_fit = np.array([demos[0][-1, joint] for joint in range(n_joints)])
+def fit(
+    demos: List[np.ndarray],
+    tau: float,
+    dt: float,
+    n_basis_functions: int,
+    alpha_canonical: float,
+    alpha_transformation: float,
+    beta_transformation: float,
+) -> DMPModel:
+    """
+    Fit a DMP from a list of joint trajectories.
+    This is the main function to fit a DMP model to a list of joint trajectories.
 
-    return DMPModel(weights=weights, 
-                    centers=centers, 
-                    widths=widths, 
-                    alpha_canonical=alpha_canonical, 
-                    alpha_transformation=alpha_transformation, 
-                    beta_transformation=beta_transformation, 
-                    tau=tau, 
-                    n_joints=n_joints)
+    Args:
+        demos: list of trajectories, each of shape (T, n_joints), radians.
+    
+    Returns:
+        DMPModel: the fitted DMP model
+    """
+    # 1. Validate and get demo shape
+    T_demo, n_joints = _validate_and_get_demo_shape(demos)
+
+    # 2. Get canonical phase variable for each trajectory time step.
+    t_demo = np.arange(T_demo, dtype=np.float64) * dt
+    x = np.exp(-alpha_canonical * t_demo / tau) # canonical phase variable (0 to 1)
+
+    # 3. Get center and width for the basis functions (in phase-space)
+    centers, widths = _centers_and_widths(alpha_canonical, n_basis_functions)
+    phi = _rbf_normalized(x, centers, widths)
+
+    # 4. Solve LWR weights
+    ridge_lambda = 1e-6
+    diff_g_q0_eps = 0.02 # previously 1e-6 (0.02 is about 1.15 deg)
+    savgol_window_length = 11 #11
+    savgol_polyorder = 3 #3
+
+    weights = _solve_lwr_weights(
+        demos=demos,
+        phi=phi,
+        n_joints=n_joints,
+        n_basis_functions=n_basis_functions,
+        tau=tau,
+        dt=dt,
+        alpha_transformation=alpha_transformation,
+        beta_transformation=beta_transformation,
+        ridge_lambda=ridge_lambda,
+        diff_g_q0_eps=diff_g_q0_eps,
+        savgol_window_length=savgol_window_length,
+        savgol_polyorder=savgol_polyorder,
+    )
+
+    # 5. Return the model
+    return DMPModel(
+        weights=weights,
+        centers=centers,
+        widths=widths,
+        alpha_canonical=alpha_canonical,
+        alpha_transformation=alpha_transformation,
+        beta_transformation=beta_transformation,
+        tau=tau,
+        n_joints=n_joints,
+    )
 
 def rollout_simple(model: DMPModel,
             q0: np.ndarray,
@@ -99,36 +333,52 @@ def rollout_simple(model: DMPModel,
             dt: float) -> np.ndarray:
     """
     Rollout a DMP from a given initial and goal position.
+    This is a simple rollout function that uses Euler integration for simplicity.
+    Rollout means to generate a trajectory from the initial position to the goal position.
 
-    Uses Euler integration for simplicity.
+    Args:
+        model: DMPModel: the fitted DMP model
+        q0: np.ndarray: the initial position
+        g: np.ndarray: the goal position
+        tau: float: the time constant
+        dt: float: the time step
+
+    Returns:
+        np.ndarray: the generated trajectory
+    
     """
-    n_steps = int(round(tau / dt)) + 1
-    q = q0.copy().astype(float) # initial position
-    dq = np.zeros_like(q) # initial velocity
-    q_gen = np.zeros((n_steps, model.n_joints)) # generated trajectory
-    q_gen[0] = q # initial position
+    # 0. Initialize the trajectory
+    n_steps = int(round(tau / dt)) + 1 # Number of time steps
+    q_gen = np.zeros((n_steps, model.n_joints))  # Generated trajectory
+    q = q0.copy().astype(float)  # Current position
+    q_gen[0] = q # Initial position
+    dq = np.zeros_like(q)  # Current velocity
 
-    t = 0.0
+    t = 0.0 # Time
     for k in range(1, n_steps):
-        x = np.exp(-model.alpha_canonical * t / tau)
+        # 1. Get canonical phase variable
+        x = canonical_phase(t, tau=tau, alpha_canonical=model.alpha_canonical)
 
-        for j in range(model.n_joints):
-            # Forcing term
-            psi = np.exp(-model.widths * (x - model.centers)**2)
-            psi_norm = psi / (psi.sum() + 1e-10)
-            f = np.dot(psi_norm, model.weights[j])
-            
-            # Tranformation systems
-            ddq = (model.alpha_transformation * model.beta_transformation * (g[j] - q[j]) - model.alpha_transformation * dq[j] + (g[j] - q0[j]) * f) / (tau**2)
-            dq[j] += ddq * dt
-            q[j] += dq[j] * dt
+        # 2. Compute the forcing term for each joint
+        for joint in range(model.n_joints):
+            # 2.1. Compute the RBF activations
+            psi_norm = _rbf_normalized(x, model.centers, model.widths)
+            f = x * np.dot(psi_norm, model.weights[joint]) # forcing term for each joint
 
-        q_gen[k] = q # store current position
-        t += dt # increment time
+            # 2.2. Compute the transformation system
+            ddq = (model.alpha_transformation * model.beta_transformation * (g[joint] - q[joint]) - model.alpha_transformation * dq[joint] + (g[joint] - q0[joint]) * f) / (tau**2)
+            # 2.3. Update the velocity and position (Euler integration)
+            dq[joint] += ddq * dt
+            q[joint] += dq[joint] * dt
+
+        # 3. Update the trajectory and time
+        q_gen[k] = q
+        t += dt
 
     return q_gen
 
-def rollout_rk4(model,
+def rollout_rk4(
+                model: DMPModel,
                 q0: np.ndarray,
                 g: np.ndarray,
                 tau: float,
@@ -167,14 +417,14 @@ def rollout_rk4(model,
         """Compute forcing f for all joints at phase x."""
         psi = np.exp(-widths * (x_scalar - centers) ** 2)          # (n_basis,)
         psi_norm = psi / (psi.sum() + 1e-10)                      # (n_basis,)
-        # f_j = psi_norm dot weights[j]
-        return weights @ psi_norm                                  # (n_joints,)
+        # f_j = x * (psi_norm dot weights[j])
+        return x_scalar * (weights @ psi_norm)                  # (n_joints,)
 
-    def rhs(t: float, y: np.ndarray) -> np.ndarray:
+    def rhs(_t: float, y: np.ndarray) -> np.ndarray:
         """
         y' = [dq, ddq, dx]
         
-        RHS = Right Hand Side of the ODE
+        RHS = right-hand side of the ODE
         """
         q  = y[:n]
         dq = y[n:2*n]
