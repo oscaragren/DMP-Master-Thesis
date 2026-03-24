@@ -22,12 +22,10 @@ class DMPModel:
     tau: float
     n_joints: int
 
-
 def _rbf_normalized(x: np.ndarray, centers: np.ndarray, widths: np.ndarray) -> np.ndarray:
     """Compute Gaussian RBF activations normalized row-wise."""
     psi = np.exp(-widths * (x[:, None] - centers[None, :]) ** 2)
     return psi / (psi.sum(axis=1, keepdims=True) + 1e-10)
-
 
 def _validate_and_get_demo_shape(demos: List[np.ndarray]) -> tuple[int, int]:
     """Validate demos list and return (T_demo, n_joints)."""
@@ -61,7 +59,6 @@ def _centers_and_widths(alpha_canonical: float, n_basis_functions: int) -> tuple
         widths = np.diff(centers)
         widths = np.hstack((widths, [widths[-1]]))
     return centers, widths
-
 
 def savgol_estimation(
     q: np.ndarray,
