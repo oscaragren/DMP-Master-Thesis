@@ -18,7 +18,7 @@ FRAME_SIZE = (640, 400)
 FPS_NOMINAL = 30.0
 VIDEO_PATH = OUTPUT_DIR / f"subject_{args.subject:02d}_{args.motion}_trial_{args.trial:03d}.mp4"
 COUNTDOWN_SECONDS = 3  # 3, 2, 1 then Go
-RECORD_DURATION = 4.0  # seconds
+RECORD_DURATION = 30.0  # seconds
 
 print(f"Saving to {OUTPUT_DIR}")
 print(f"Countdown {COUNTDOWN_SECONDS}s, then recording {RECORD_DURATION}s. Press 'q' to quit early.")

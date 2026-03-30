@@ -833,6 +833,7 @@ def set_axes_equal(ax: Axes3D) -> None:
 def plot_3d_trajectory(seq: np.ndarray, t: np.ndarray, meta: dict, out_path: Path | None = None) -> None:
     T, K, _ = seq.shape
     names = meta.get("keypoint_names", KEYPOINT_NAMES)[:K]
+    name_to_idx = {str(name): idx for idx, name in enumerate(names)}
 
     fig = plt.figure(figsize=(12, 5))
 
@@ -854,6 +855,35 @@ def plot_3d_trajectory(seq: np.ndarray, t: np.ndarray, meta: dict, out_path: Pat
         if T == 0:
             break
         alpha = 0.3 + 0.35 * (i / max(1, 2))
+        # Draw requested skeleton vectors when keypoint names are available.
+        requested_edges = [
+            ("right_shoulder", "left_shoulder"),
+            ("left_shoulder", "left_elbow"),
+            ("left_elbow", "left_wrist"),
+        ]
+        drawn_any_requested = False
+        for a_name, b_name in requested_edges:
+            if a_name in name_to_idx and b_name in name_to_idx:
+                p0 = seq[ti, name_to_idx[a_name]]
+                p1 = seq[ti, name_to_idx[b_name]]
+                if np.all(np.isfinite(p0)) and np.all(np.isfinite(p1)):
+                    ax1.quiver(
+                        p0[0],
+                        p0[2],
+                        -p0[1],
+                        p1[0] - p0[0],
+                        p1[2] - p0[2],
+                        -(p1[1] - p0[1]),
+                        arrow_length_ratio=0.2,
+                        color="k",
+                        alpha=alpha,
+                        linewidth=2,
+                    )
+                    drawn_any_requested = True
+
+        # Fallback to previous adjacent-link drawing if requested names are unavailable.
+        if drawn_any_requested:
+            continue
         for j in range(K - 1):
             p0 = seq[ti, j]
             p1 = seq[ti, j + 1]

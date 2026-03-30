@@ -31,7 +31,7 @@ def deproject(u, v, z_m, fx, fy, cx, cy):
     return float(x), float(y), float(z_m)
 
 COUNTDOWN_SECONDS = 3  # 3, 2, 1 then Go
-RECORD_DURATION = 4.0  # seconds to record after countdown
+RECORD_DURATION = 8.0  # seconds to record after countdown
 
 def _draw_centered_text(frame, text, font_scale=3, thickness=6):
     h, w = frame.shape[:2]

@@ -239,16 +239,6 @@ def _solve_lwr_weights(
                 savgol_polyorder=savgol_polyorder,
             )
 
-            if demo_idx == 0:
-                # Debug print for the first demo to inspect derivative/scale magnitudes.
-                print(
-                    f"[dmp.fit] demo0 joint={joint} "
-                    f"q0={q0_joint:.6g} g={g_joint:.6g} "
-                    f"g-q0={g_minus_q0:.6g} |g-q0|={abs(g_minus_q0):.6g} "
-                    f"max_dq={np.nanmax(dq):.6g} max_ddq={np.nanmax(ddq):.6g} "
-                    f"max_abs_dq={np.nanmax(np.abs(dq)):.6g} max_abs_ddq={np.nanmax(np.abs(ddq)):.6g}"
-                )
-
             b += phi.T @ f_target
 
         weights[joint, :] = np.linalg.solve(A_reg, b)
@@ -358,8 +348,9 @@ def rollout_simple(model: DMPModel,
 
         # 2. Compute the forcing term for each joint
         for joint in range(model.n_joints):
-            # 2.1. Compute the RBF activations
-            psi_norm = _rbf_normalized(x, model.centers, model.widths)
+            # 2.1. Compute scalar-phase RBF activations for this timestep
+            psi = np.exp(-model.widths * (x - model.centers) ** 2)
+            psi_norm = psi / (psi.sum() + 1e-10)
             f = x * np.dot(psi_norm, model.weights[joint]) # forcing term for each joint
 
             # 2.2. Compute the transformation system
