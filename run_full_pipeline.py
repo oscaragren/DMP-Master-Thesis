@@ -134,8 +134,8 @@ def _load_raw_seq_t(trial_dir: Path) -> tuple[np.ndarray, np.ndarray]:
     if not seq_path.exists():
         raise FileNotFoundError(f"Not found: {seq_path}")
     seq = np.load(seq_path)
-    if seq.ndim != 3 or seq.shape[1] != 4 or seq.shape[2] != 3:
-        raise ValueError(f"Expected seq shape (T, 4, 3), got {seq.shape}")
+    if seq.ndim != 3 or seq.shape[2] != 3 or seq.shape[1] < 4:
+        raise ValueError(f"Expected seq shape (T, N>=4, 3), got {seq.shape}")
     t = np.load(t_path) if t_path.exists() else np.arange(seq.shape[0], dtype=np.float64)
     if t.ndim != 1 or len(t) != seq.shape[0]:
         t = np.arange(seq.shape[0], dtype=np.float64)
@@ -151,8 +151,8 @@ def _load_clean_seq_t(trial_dir: Path) -> tuple[np.ndarray, np.ndarray]:
     if not seq_path.exists():
         raise FileNotFoundError(f"Not found: {seq_path}")
     seq = np.load(seq_path)
-    if seq.ndim != 3 or seq.shape[1] != 4 or seq.shape[2] != 3:
-        raise ValueError(f"Expected cleaned seq shape (T, 4, 3), got {seq.shape}")
+    if seq.ndim != 3 or seq.shape[2] != 3 or seq.shape[1] < 4:
+        raise ValueError(f"Expected cleaned seq shape (T, N>=4, 3), got {seq.shape}")
     t = np.load(t_path) if t_path.exists() else np.arange(seq.shape[0], dtype=np.float64)
     if t.ndim != 1 or len(t) != seq.shape[0]:
         t = np.arange(seq.shape[0], dtype=np.float64)
@@ -230,6 +230,7 @@ def run_full_pipeline(
     filter_orders: list[int] | None = None,
     n_basis_list: list[int] | None = None,
     use_keypoint_cleaning: bool = False,
+    shoulder_method: str = "vector",
 ) -> None:
     """Run RAW vs CLEAN sweep pipeline for a single trial directory."""
     if not trial_dir.exists():
@@ -246,6 +247,7 @@ def run_full_pipeline(
     print(f"  filter_orders: {filter_orders}")
     print(f"  n_basis_list:  {n_basis_list}")
     print(f"  clean_mode:    {'keypoints' if use_keypoint_cleaning else 'angles'}")
+    print(f"  shoulder_method: {shoulder_method}")
 
     generated_files: list[Path] = []
     run_report: dict = {
@@ -259,6 +261,7 @@ def run_full_pipeline(
             "filter_orders": [int(v) for v in filter_orders],
             "n_basis_list": [int(v) for v in n_basis_list],
             "clean_mode": "keypoints" if use_keypoint_cleaning else "angles",
+            "shoulder_method": str(shoulder_method),
             "dmp": {
                 "tau": float(DMP_TAU),
                 "alpha_canonical": float(DMP_ALPHA_CANONICAL),
@@ -288,7 +291,7 @@ def run_full_pipeline(
     plot_3d_trajectory(raw_seq, raw_t, meta, raw_keypoints_fig)
     generated_files.append(raw_keypoints_fig)
     print("RAW: mapping sequence to joint angles...")
-    raw_elbow_rad, raw_shoulder_rad = sequence_to_angles_rad(raw_seq)
+    raw_elbow_rad, raw_shoulder_rad = sequence_to_angles_rad(raw_seq, shoulder_method=shoulder_method)
     run_report["angles_stage"]["raw"] = {
         "elbow_shape": [int(v) for v in raw_elbow_rad.shape],
         "shoulder_shape": [int(v) for v in raw_shoulder_rad.shape],
@@ -317,7 +320,7 @@ def run_full_pipeline(
             )
             clean_seq, clean_t = _load_clean_seq_t(trial_dir)
             print(f"CLEAN(o{order}): mapping sequence to joint angles...")
-            elbow_rad, shoulder_rad = sequence_to_angles_rad(clean_seq)
+            elbow_rad, shoulder_rad = sequence_to_angles_rad(clean_seq, shoulder_method=shoulder_method)
         else:
             print(f"CLEAN(o{order}): cleaning in joint-angle space...")
             elbow_rad, shoulder_rad, clean_t = clean_angles_trajectory(
@@ -600,6 +603,13 @@ def main() -> None:
         action="store_true",
         help="Use capture/clean_keypoints.py logic (clean in keypoint space before angle mapping).",
     )
+    parser.add_argument(
+        "--shoulder-method",
+        type=str,
+        default="vector",
+        choices=["vector", "rotmat"],
+        help="Shoulder angle method: 'vector' (legacy) or 'rotmat' (uses hand direction if available).",
+    )
     args = parser.parse_args()
 
     if args.path is not None:
@@ -615,6 +625,7 @@ def main() -> None:
         filter_orders=list(args.filter_orders),
         n_basis_list=list(args.n_basis),
         use_keypoint_cleaning=bool(args.use_keypoint_cleaning),
+        shoulder_method=str(args.shoulder_method),
     )
 
 

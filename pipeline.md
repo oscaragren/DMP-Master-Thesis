@@ -20,7 +20,7 @@ For each path, it generates angle plots, DMP fit/rollout plots, and `.npz` artif
 
 Required in the trial directory:
 
-- `left_arm_seq_camera.npy` with shape `(T, 4, 3)`
+- `left_arm_seq_camera.npy` with shape `(T, N, 3)` where `N >= 4`
 - `left_arm_t.npy` with shape `(T,)` (optional fallback to index time)
 
 Optional:

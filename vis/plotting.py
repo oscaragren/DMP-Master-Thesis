@@ -516,8 +516,8 @@ def load_trial_left_arm_sequence(trial_dir: Path) -> tuple[np.ndarray, np.ndarra
     if not seq_path.exists():
         raise FileNotFoundError(f"Not found: {seq_path}")
     seq = np.load(seq_path)
-    if seq.ndim != 3 or seq.shape[1] != 4 or seq.shape[2] != 3:
-        raise ValueError(f"Expected seq shape (T, 4, 3), got {seq.shape}")
+    if seq.ndim != 3 or seq.shape[2] != 3 or seq.shape[1] < 4:
+        raise ValueError(f"Expected seq shape (T, N>=4, 3), got {seq.shape}")
     t = np.load(t_path) if t_path.exists() else np.arange(seq.shape[0], dtype=np.float64)
     return seq, t, _load_meta(trial_dir)
 

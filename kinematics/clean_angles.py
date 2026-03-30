@@ -133,8 +133,8 @@ def run_clean_left_arm_angles(
         raise FileNotFoundError(f"Missing {seq_path}")
 
     seq = np.load(seq_path)
-    if seq.ndim != 3 or seq.shape[1:] != (4, 3):
-        raise ValueError(f"Expected left_arm_seq shape (T, 4, 3), got {seq.shape}")
+    if seq.ndim != 3 or seq.shape[2] != 3 or seq.shape[1] < 4:
+        raise ValueError(f"Expected left_arm_seq shape (T, N>=4, 3), got {seq.shape}")
 
     t = np.load(t_path) if t_path.exists() else np.arange(seq.shape[0], dtype=np.float64)
     if t.ndim != 1 or t.shape[0] != seq.shape[0]:

@@ -23,30 +23,43 @@ if __name__ == "__main__":
 
 from kinematics.left_arm_angles import (
     elbow_flexion_deg,
-    shoulder_flex_abd_rot_3dof,
     elbow_flexion_rad,
-    shoulder_flex_abd_rot_3dof_rad,
+    shoulder_angles,
 )
 
 
-def sequence_to_angles_rad(seq: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def sequence_to_angles_rad(
+    seq: np.ndarray,
+    *,
+    shoulder_method: str = "vector",
+) -> tuple[np.ndarray, np.ndarray]:
     """
     Convert a left-arm 3D sequence to elbow and shoulder angles in **radians**.
 
-    seq: (T, 4, 3) with [left_shoulder, left_elbow, left_wrist, right_shoulder]
-         in camera-frame meters.
+    seq: (T, N, 3) in camera-frame meters.
+         Minimum required indices:
+             0: left_shoulder
+             1: left_elbow
+             2: left_wrist
+             3: right_shoulder
+         Additional required for shoulder_method="rotmat":
+             4: left_index
+             5: left_pinky
 
     Returns:
         elbow_rad: (T,) elbow flexion in radians; NaN where invalid.
-        shoulder_rad: (T, 3) shoulder angles in radians
-            [shoulder_flexion, shoulder_abduction, shoulder_internal_rotation]; NaN where invalid.
+        shoulder_rad: (T, 3) shoulder angles in radians:
+            [shoulder_flexion, shoulder_abduction, shoulder_axial_rotation_proxy]; NaN where invalid.
     """
-    if seq.ndim != 3 or seq.shape[1] != 4 or seq.shape[2] != 3:
+    if seq.ndim != 3 or seq.shape[2] != 3 or seq.shape[1] < 4:
         raise ValueError(
-            f"Expected seq shape (T, 4, 3) [left_shoulder, left_elbow, left_wrist, right_shoulder], got {seq.shape}"
+            f"Expected seq shape (T, N>=4, 3) with [left_shoulder, left_elbow, left_wrist, right_shoulder, ...], got {seq.shape}"
         )
-    elbow_rad = elbow_flexion_rad(seq)
-    shoulder_rad = shoulder_flex_abd_rot_3dof_rad(seq)
+    # Elbow uses only the first 3 points; keep legacy shape for safety.
+    elbow_rad = elbow_flexion_rad(seq[:, :4, :])
+
+    shoulder_deg = shoulder_angles(seq, method=shoulder_method)
+    shoulder_rad = np.deg2rad(shoulder_deg)
     return elbow_rad, shoulder_rad
 
 

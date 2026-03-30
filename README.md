@@ -54,9 +54,11 @@ DMP-Master-Thesis/
 
 ### Kinematics and mapping
 
-- **`kinematics/left_arm_angles.py`** — From 3D keypoint sequence `(T, 4, 3)` [left_shoulder, left_elbow, left_wrist, right_shoulder]:
+- **`kinematics/left_arm_angles.py`** — From 3D keypoint sequence `(T, N, 3)` (minimum `N=4`) [left_shoulder, left_elbow, left_wrist, right_shoulder, ...]:
   - **Elbow:** flexion angle (radians, with helpers for degrees).
-  - **Shoulder:** 3-DOF in a trunk frame (elevation, azimuth, internal rotation), radians (helpers for degrees).
+  - **Shoulder:** 3-DOF in a trunk frame; supports:
+    - `"vector"` method (fast; axial twist is unstable/underdetermined from shoulder–elbow–wrist alone)
+    - `"rotmat"` method (uses hand direction landmarks to compute a more stable **axial_rotation_proxy**)
 - **`mapping/sequence_to_angles.py`** — Loads `left_arm_seq_camera.npy` from a trial dir, calls kinematics, saves `angles.npz` (elbow_rad, shoulder_rad plus backward-compatible *_deg copies) and updates `meta.json`. Can be run per trial via CLI (`--path` or `--subject`/`--motion`/`--trial`).
 
 ### DMP

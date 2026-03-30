@@ -89,15 +89,15 @@ def run_clean_left_arm_sequence(
     """
     Clean left_arm_seq_camera.npy in trial_dir: low-pass filter, optional resample.
     Writes to left_arm_seq_camera_cleaned.npy and left_arm_t_cleaned.npy (originals unchanged).
-    Expects (T, 4, 3) and (T,) arrays.
+    Expects (T, N>=4, 3) and (T,) arrays.
     """
     seq_path = trial_dir / "left_arm_seq_camera.npy"
     t_path = trial_dir / "left_arm_t.npy"
     if not seq_path.exists():
         raise FileNotFoundError(f"Missing {seq_path}")
     seq = np.load(seq_path)
-    if seq.ndim != 3 or seq.shape[1] != 4 or seq.shape[2] != 3:
-        raise ValueError(f"Expected left_arm_seq shape (T, 4, 3), got {seq.shape}")
+    if seq.ndim != 3 or seq.shape[2] != 3 or seq.shape[1] < 4:
+        raise ValueError(f"Expected left_arm_seq shape (T, N>=4, 3), got {seq.shape}")
     t = np.load(t_path) if t_path.exists() else np.arange(seq.shape[0], dtype=np.float64)
     if len(t) != seq.shape[0]:
         t = np.arange(seq.shape[0], dtype=np.float64)
