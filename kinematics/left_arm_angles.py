@@ -256,9 +256,13 @@ def shoulder_angles_rotmat(seq: np.ndarray) -> np.ndarray:
     return out
 
 
-def shoulder_angles(seq: np.ndarray, method: str = "vector") -> np.ndarray:
+def shoulder_angles(
+    seq: np.ndarray,
+    method: str = "vector",
+    prev_angles: np.ndarray | None = None,
+) -> np.ndarray:
     """
-    Unified shoulder-angle API with selectable method.
+    Unified left-arm angle API with selectable method.
 
     Args:
         seq: (T, N, 3) keypoints in camera frame.
@@ -271,34 +275,52 @@ def shoulder_angles(seq: np.ndarray, method: str = "vector") -> np.ndarray:
                 4: left_index
                 5: left_pinky
         method:
-            - "vector": current vector-geometry method (fast, simple). The 3rd component
-              is *not reliable* as a true internal rotation because twist is underdetermined
-              from shoulder–elbow–wrist alone.
+            - "vector": existing vector-geometry method (fast, simple).
+              The returned internal rotation is **not reliable** as a true anatomical internal rotation
+              because twist is underdetermined from shoulder–elbow–wrist alone.
             - "rotmat": rotation-matrix method using hand direction to resolve twist.
               Returns an **axial_rotation_proxy** (still a proxy; not pure anatomical internal rotation).
+            - "ik": optimization-based IK with temporal smoothing + soft joint limits.
+              This does NOT directly measure internal rotation; it returns a **physically plausible
+              estimate** stabilized by smoothness, joint limits, and kinematic consistency.
+        prev_angles:
+            Optional (T, 4) degrees prior used for method="ik" smoothing/initialization:
+            [flex, abd, internal_rot, elbow_flex]. Ignored for other methods.
 
     Returns:
-        (T, 3) degrees: [flexion_deg, abduction_deg, axial_rotation_proxy_deg]
+        (T, 4) degrees:
+            [shoulder_flexion_deg, shoulder_abduction_deg, shoulder_internal_rotation_deg, elbow_flexion_deg]
 
     Fallback behavior:
         If method="rotmat" but hand landmarks are missing (N < 6), this function
         falls back to method="vector".
     """
     m = (method or "vector").strip().lower()
-    if m not in {"vector", "rotmat"}:
-        raise ValueError(f"Unknown method '{method}'. Use 'vector' or 'rotmat'.")
+    if m not in {"vector", "rotmat", "ik"}:
+        raise ValueError(f"Unknown method '{method}'. Use 'vector', 'rotmat', or 'ik'.")
 
     # Graceful fallback if hand landmarks are missing.
     if m == "rotmat" and (seq.ndim != 3 or seq.shape[1] < 6):
         m = "vector"
 
     if m == "vector":
-        # Keep the existing implementation intact; treat its 3rd angle as an axial proxy.
         if seq.ndim != 3 or seq.shape[1] < 4 or seq.shape[2] != 3:
             raise ValueError(f"Expected seq shape (T, N>=4, 3) for vector method, got {seq.shape}")
-        return shoulder_flex_abd_rot_3dof(seq[:, :4, :])
+        sh = shoulder_flex_abd_rot_3dof(seq[:, :4, :])  # (T,3)
+        el = elbow_flexion_deg(seq[:, :4, :])  # (T,)
+        return np.column_stack([sh, el])
 
-    return shoulder_angles_rotmat(seq)
+    if m == "rotmat":
+        sh = shoulder_angles_rotmat(seq)  # (T,3)
+        el = elbow_flexion_deg(seq[:, :4, :])  # (T,)
+        return np.column_stack([sh, el])
+
+    # IK method: uses only shoulder, elbow, wrist (indices 0..2).
+    from kinematics.ik_solver import solve_ik_sequence
+
+    if seq.ndim != 3 or seq.shape[2] != 3 or seq.shape[1] < 3:
+        raise ValueError(f"Expected seq shape (T, N>=3, 3) for ik method, got {seq.shape}")
+    return solve_ik_sequence(seq[:, :3, :], prev_angles_deg=prev_angles)
 
 
 def _signed_angle_around_axis(

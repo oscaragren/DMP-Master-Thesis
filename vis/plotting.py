@@ -44,6 +44,17 @@ def _ensure_2d(a: np.ndarray) -> np.ndarray:
     return a[:, None] if a.ndim == 1 else a
 
 
+def _angles_in_units(x_rad: np.ndarray, units: str) -> np.ndarray:
+    u = (units or "deg").strip().lower()
+    if u not in {"deg", "rad"}:
+        raise ValueError(f"Unknown units '{units}'. Use 'deg' or 'rad'.")
+    return np.degrees(x_rad) if u == "deg" else x_rad
+
+
+def _angle_ylabel(units: str) -> str:
+    return "Angle (deg)" if (units or "deg").strip().lower() == "deg" else "Angle (rad)"
+
+
 # -------------------------
 # Angles plots (single + overlays)
 # -------------------------
@@ -56,35 +67,37 @@ def plot_angles_single(
     meta: dict,
     out_path: Path,
     title_suffix: str,
+    *,
+    units: str = "deg",
 ) -> None:
-    elbow_deg = np.degrees(elbow_rad)
-    shoulder_deg = np.degrees(shoulder_rad)
-    shoulder_deg = _ensure_2d(shoulder_deg)
+    elbow_u = _angles_in_units(elbow_rad, units)
+    shoulder_u = _ensure_2d(_angles_in_units(shoulder_rad, units))
+    ylab = _angle_ylabel(units)
 
     fig, axes = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
 
     ax = axes[0]
-    valid = np.isfinite(elbow_deg)
+    valid = np.isfinite(elbow_u)
     if np.any(valid):
-        ax.plot(t[valid], elbow_deg[valid], color="#3498db", linewidth=1.5, label="Elbow flexion")
-    ax.set_ylabel("Angle (deg)")
+        ax.plot(t[valid], elbow_u[valid], color="#3498db", linewidth=1.5, label="Elbow flexion")
+    ax.set_ylabel(ylab)
     ax.set_title("Elbow flexion (upper arm–forearm angle)")
     ax.legend(loc="upper right")
     ax.grid(True, alpha=0.3)
-    ax.set_ylim(0, 200)
+    ax.set_ylim(0, 200 if (units or "deg").strip().lower() == "deg" else np.deg2rad(200))
 
     ax = axes[1]
     labels = ["Flexion", "Abduction", "Internal rotation"]
     colors = ["#e74c3c", "#2ecc71", "#9b59b6"]
     for i, (label, color) in enumerate(zip(labels, colors)):
-        if i >= shoulder_deg.shape[1]:
+        if i >= shoulder_u.shape[1]:
             continue
-        vals = shoulder_deg[:, i]
+        vals = shoulder_u[:, i]
         valid = np.isfinite(vals)
         if np.any(valid):
             ax.plot(t[valid], vals[valid], color=color, linewidth=1.5, label=label)
     ax.set_xlabel("Time (s)")
-    ax.set_ylabel("Angle (deg)")
+    ax.set_ylabel(ylab)
     ax.set_title("Shoulder 3-DOF (flexion, abduction, internal rotation)")
     ax.legend(loc="upper right")
     ax.grid(True, alpha=0.3)
@@ -104,11 +117,14 @@ def plot_angles_overlay_grid(
     cleans: list[tuple[int, np.ndarray, np.ndarray, np.ndarray]],
     meta: dict,
     out_path: Path,
+    *,
+    units: str = "deg",
 ) -> None:
     """Rows: raw vs each clean order + 'all together'. Cols: elbow + shoulder."""
     elbow_raw_rad, shoulder_raw_rad, t_raw = raw
-    elbow_raw_deg = np.degrees(elbow_raw_rad)
-    shoulder_raw_deg = _ensure_2d(np.degrees(shoulder_raw_rad))
+    elbow_raw_u = _angles_in_units(elbow_raw_rad, units)
+    shoulder_raw_u = _ensure_2d(_angles_in_units(shoulder_raw_rad, units))
+    ylab = _angle_ylabel(units)
 
     rows = len(cleans) + 1
     fig, axes = plt.subplots(rows, 2, figsize=(14, 2.8 * rows), sharex=False)
@@ -117,18 +133,18 @@ def plot_angles_overlay_grid(
 
     # Per-clean comparisons
     for r, (order, elbow_clean_rad, shoulder_clean_rad, t_clean) in enumerate(cleans):
-        elbow_clean_deg = np.degrees(elbow_clean_rad)
-        shoulder_clean_deg = _ensure_2d(np.degrees(shoulder_clean_rad))
+        elbow_clean_u = _angles_in_units(elbow_clean_rad, units)
+        shoulder_clean_u = _ensure_2d(_angles_in_units(shoulder_clean_rad, units))
 
         ax = axes[r, 0]
-        valid = np.isfinite(elbow_raw_deg)
+        valid = np.isfinite(elbow_raw_u)
         if np.any(valid):
-            ax.plot(t_raw[valid], elbow_raw_deg[valid], color="#3498db", linewidth=1.2, label="raw")
-        valid = np.isfinite(elbow_clean_deg)
+            ax.plot(t_raw[valid], elbow_raw_u[valid], color="#3498db", linewidth=1.2, label="raw")
+        valid = np.isfinite(elbow_clean_u)
         if np.any(valid):
             ax.plot(
                 t_clean[valid],
-                elbow_clean_deg[valid],
+                elbow_clean_u[valid],
                 color="#2980b9",
                 linestyle="--",
                 linewidth=1.2,
@@ -136,9 +152,9 @@ def plot_angles_overlay_grid(
             )
         ax.set_title(f"Elbow flexion — raw vs clean (filter_order={order})")
         ax.set_xlabel("Time (s) (or index if timestamps missing)")
-        ax.set_ylabel("Angle (deg)")
+        ax.set_ylabel(ylab)
         ax.grid(True, alpha=0.3)
-        ax.set_ylim(0, 200)
+        ax.set_ylim(0, 200 if (units or "deg").strip().lower() == "deg" else np.deg2rad(200))
         ax.legend(loc="upper right", fontsize=8)
 
         ax = axes[r, 1]
@@ -146,13 +162,13 @@ def plot_angles_overlay_grid(
         raw_colors = ["#e74c3c", "#2ecc71", "#9b59b6"]
         clean_colors = ["#c0392b", "#27ae60", "#8e44ad"]
         for i, lab in enumerate(labels):
-            if i < shoulder_raw_deg.shape[1]:
-                vals = shoulder_raw_deg[:, i]
+            if i < shoulder_raw_u.shape[1]:
+                vals = shoulder_raw_u[:, i]
                 valid = np.isfinite(vals)
                 if np.any(valid):
                     ax.plot(t_raw[valid], vals[valid], color=raw_colors[i], linewidth=1.1, label=f"{lab} raw")
-            if i < shoulder_clean_deg.shape[1]:
-                vals = shoulder_clean_deg[:, i]
+            if i < shoulder_clean_u.shape[1]:
+                vals = shoulder_clean_u[:, i]
                 valid = np.isfinite(vals)
                 if np.any(valid):
                     ax.plot(
@@ -165,7 +181,7 @@ def plot_angles_overlay_grid(
                     )
         ax.set_title(f"Shoulder 3-DOF — raw vs clean (filter_order={order})")
         ax.set_xlabel("Time (s) (or index if timestamps missing)")
-        ax.set_ylabel("Angle (deg)")
+        ax.set_ylabel(ylab)
         ax.grid(True, alpha=0.3)
         ax.axhline(0, color="gray", linestyle="--", alpha=0.4)
         ax.legend(loc="upper right", ncols=2, fontsize=7)
@@ -173,42 +189,42 @@ def plot_angles_overlay_grid(
     # All together row
     r = rows - 1
     ax = axes[r, 0]
-    valid = np.isfinite(elbow_raw_deg)
+    valid = np.isfinite(elbow_raw_u)
     if np.any(valid):
-        ax.plot(t_raw[valid], elbow_raw_deg[valid], color="#3498db", linewidth=1.2, label="raw")
+        ax.plot(t_raw[valid], elbow_raw_u[valid], color="#3498db", linewidth=1.2, label="raw")
     for order, elbow_clean_rad, _, t_clean in cleans:
-        elbow_clean_deg = np.degrees(elbow_clean_rad)
-        valid = np.isfinite(elbow_clean_deg)
+        elbow_clean_u = _angles_in_units(elbow_clean_rad, units)
+        valid = np.isfinite(elbow_clean_u)
         if np.any(valid):
-            ax.plot(t_clean[valid], elbow_clean_deg[valid], linestyle="--", linewidth=1.0, label=f"clean o{order}")
+            ax.plot(t_clean[valid], elbow_clean_u[valid], linestyle="--", linewidth=1.0, label=f"clean o{order}")
     ax.set_title("Elbow flexion — raw vs all clean variants")
     ax.set_xlabel("Time (s) (or index if timestamps missing)")
-    ax.set_ylabel("Angle (deg)")
+    ax.set_ylabel(ylab)
     ax.grid(True, alpha=0.3)
-    ax.set_ylim(0, 100)
+    ax.set_ylim(0, 100 if (units or "deg").strip().lower() == "deg" else np.deg2rad(100))
     ax.legend(loc="upper right", ncols=3, fontsize=8)
 
     ax = axes[r, 1]
     labels = ["Flex", "Abd", "IR"]
     raw_colors = ["#e74c3c", "#2ecc71", "#9b59b6"]
     for i, lab in enumerate(labels):
-        if i < shoulder_raw_deg.shape[1]:
-            vals = shoulder_raw_deg[:, i]
+        if i < shoulder_raw_u.shape[1]:
+            vals = shoulder_raw_u[:, i]
             valid = np.isfinite(vals)
             if np.any(valid):
                 ax.plot(t_raw[valid], vals[valid], color=raw_colors[i], linewidth=1.2, label=f"{lab} raw")
     for order, _, shoulder_clean_rad, t_clean in cleans:
-        shoulder_clean_deg = _ensure_2d(np.degrees(shoulder_clean_rad))
+        shoulder_clean_u = _ensure_2d(_angles_in_units(shoulder_clean_rad, units))
         for i, lab in enumerate(labels):
-            if i >= shoulder_clean_deg.shape[1]:
+            if i >= shoulder_clean_u.shape[1]:
                 continue
-            vals = shoulder_clean_deg[:, i]
+            vals = shoulder_clean_u[:, i]
             valid = np.isfinite(vals)
             if np.any(valid):
                 ax.plot(t_clean[valid], vals[valid], linestyle="--", linewidth=1.0, label=f"{lab} clean o{order}")
     ax.set_title("Shoulder 3-DOF — raw vs all clean variants")
     ax.set_xlabel("Time (s) (or index if timestamps missing)")
-    ax.set_ylabel("Angle (deg)")
+    ax.set_ylabel(ylab)
     ax.grid(True, alpha=0.3)
     ax.axhline(0, color="gray", linestyle="--", alpha=0.4)
     ax.legend(loc="upper right", ncols=3, fontsize=7)
@@ -233,6 +249,8 @@ def plot_dmp_single(
     meta: dict,
     out_path: Path,
     title_suffix: str,
+    *,
+    units: str = "deg",
 ) -> None:
     joint_names = [
         "Elbow flexion",
@@ -249,11 +267,12 @@ def plot_dmp_single(
 
     fig, axes = plt.subplots(2, 2, figsize=(10, 8), sharex=True)
     axes = axes.flatten()
+    ylab = _angle_ylabel(units)
     for j in range(4):
         ax = axes[j]
-        ax.plot(t_demo, np.degrees(q_demo[:, j]), color=colors_demo[j], linewidth=1.5, label="Demo (smoothed)")
-        ax.plot(t_gen, np.degrees(q_gen[:, j]), color=colors_gen[j], linestyle="--", linewidth=1.2, label="DMP")
-        ax.set_ylabel("Angle (deg)")
+        ax.plot(t_demo, _angles_in_units(q_demo[:, j], units), color=colors_demo[j], linewidth=1.5, label="Demo (smoothed)")
+        ax.plot(t_gen, _angles_in_units(q_gen[:, j], units), color=colors_gen[j], linestyle="--", linewidth=1.2, label="DMP")
+        ax.set_ylabel(ylab)
         ax.set_title(joint_names[j])
         ax.legend(loc="upper right")
         ax.grid(True, alpha=0.3)
@@ -274,6 +293,8 @@ def plot_dmp_overlay_grid(
     meta: dict,
     out_path: Path,
     n_basis: int,
+    *,
+    units: str = "deg",
 ) -> None:
     """Rows: raw vs each clean + all-together. Cols: 4 joints."""
     q_raw_demo, q_raw_gen = raw
@@ -293,6 +314,7 @@ def plot_dmp_overlay_grid(
         ax.plot(t1, y1, color=color1, linewidth=1.2, label=label1)
         ax.plot(t2, y2, color=color2, linewidth=1.1, linestyle="--", label=label2)
 
+    ylab = _angle_ylabel(units)
     for r, (order, q_clean_demo, q_clean_gen) in enumerate(cleans):
         t_clean_demo = np.linspace(0, 1.0, q_clean_demo.shape[0])
         t_clean_gen = np.linspace(0, 1.0, q_clean_gen.shape[0])
@@ -301,9 +323,9 @@ def plot_dmp_overlay_grid(
             _plot_pair(
                 ax,
                 t_raw_demo,
-                np.degrees(q_raw_demo[:, j]),
+                _angles_in_units(q_raw_demo[:, j], units),
                 t_raw_gen,
-                np.degrees(q_raw_gen[:, j]),
+                _angles_in_units(q_raw_gen[:, j], units),
                 "raw demo",
                 "raw dmp",
                 "#34495e",
@@ -312,9 +334,9 @@ def plot_dmp_overlay_grid(
             _plot_pair(
                 ax,
                 t_clean_demo,
-                np.degrees(q_clean_demo[:, j]),
+                _angles_in_units(q_clean_demo[:, j], units),
                 t_clean_gen,
-                np.degrees(q_clean_gen[:, j]),
+                _angles_in_units(q_clean_gen[:, j], units),
                 f"clean o{order} demo",
                 f"clean o{order} dmp",
                 "#8e44ad",
@@ -322,23 +344,23 @@ def plot_dmp_overlay_grid(
             )
             ax.set_title(f"{joint_names[j]} — raw vs clean (o{order})")
             ax.grid(True, alpha=0.3)
-            ax.set_ylabel("Angle (deg)")
+            ax.set_ylabel(ylab)
             ax.set_xlabel("Time (normalized)")
             ax.legend(loc="upper right", fontsize=6, framealpha=0.9)
 
     r = rows - 1
     for j in range(4):
         ax = axes[r, j]
-        ax.plot(t_raw_demo, np.degrees(q_raw_demo[:, j]), color="#34495e", linewidth=1.2, label="raw demo")
-        ax.plot(t_raw_gen, np.degrees(q_raw_gen[:, j]), color="#2c3e50", linestyle="--", linewidth=1.1, label="raw dmp")
+        ax.plot(t_raw_demo, _angles_in_units(q_raw_demo[:, j], units), color="#34495e", linewidth=1.2, label="raw demo")
+        ax.plot(t_raw_gen, _angles_in_units(q_raw_gen[:, j], units), color="#2c3e50", linestyle="--", linewidth=1.1, label="raw dmp")
         for order, q_clean_demo, q_clean_gen in cleans:
             t_clean_demo = np.linspace(0, 1.0, q_clean_demo.shape[0])
             t_clean_gen = np.linspace(0, 1.0, q_clean_gen.shape[0])
-            ax.plot(t_clean_demo, np.degrees(q_clean_demo[:, j]), linewidth=1.0, label=f"clean o{order} demo")
-            ax.plot(t_clean_gen, np.degrees(q_clean_gen[:, j]), linestyle="--", linewidth=0.9, label=f"clean o{order} dmp")
+            ax.plot(t_clean_demo, _angles_in_units(q_clean_demo[:, j], units), linewidth=1.0, label=f"clean o{order} demo")
+            ax.plot(t_clean_gen, _angles_in_units(q_clean_gen[:, j], units), linestyle="--", linewidth=0.9, label=f"clean o{order} dmp")
         ax.set_title(f"{joint_names[j]} — raw vs all cleans")
         ax.grid(True, alpha=0.3)
-        ax.set_ylabel("Angle (deg)")
+        ax.set_ylabel(ylab)
         ax.set_xlabel("Time (normalized)")
         ax.legend(loc="upper right", fontsize=6, framealpha=0.9)
 
@@ -364,6 +386,7 @@ def plot_dmp_order_basis_grids_per_joint(
     out_dir: Path,
     filename_prefix: str = "",
     n_time_points: int = 200,
+    units: str = "deg",
 ) -> list[Path]:
     """
     Create 4 figures (one per joint). Each figure is a grid:
@@ -403,6 +426,7 @@ def plot_dmp_order_basis_grids_per_joint(
     out_paths: list[Path] = []
     n_rows = len(n_basis_list)
     n_cols = len(filter_orders)
+    ylab = _angle_ylabel(units)
 
     for j, joint_name in enumerate(joint_names):
         fig, axes = plt.subplots(
@@ -423,8 +447,8 @@ def plot_dmp_order_basis_grids_per_joint(
             if n_basis not in raw_by_basis:
                 continue
             q_raw_demo, q_raw_gen = raw_by_basis[n_basis]
-            raw_demo_j = _resample_1d(np.degrees(q_raw_demo[:, j]))
-            raw_gen_j = _resample_1d(np.degrees(q_raw_gen[:, j]))
+            raw_demo_j = _resample_1d(_angles_in_units(q_raw_demo[:, j], units))
+            raw_gen_j = _resample_1d(_angles_in_units(q_raw_gen[:, j], units))
 
             for c, order in enumerate(filter_orders):
                 ax = axes[r, c]
@@ -447,8 +471,8 @@ def plot_dmp_order_basis_grids_per_joint(
                 key = (n_basis, order)
                 if key in clean_by_basis_order:
                     q_clean_demo, q_clean_gen = clean_by_basis_order[key]
-                    clean_demo_j = _resample_1d(np.degrees(q_clean_demo[:, j]))
-                    clean_gen_j = _resample_1d(np.degrees(q_clean_gen[:, j]))
+                    clean_demo_j = _resample_1d(_angles_in_units(q_clean_demo[:, j], units))
+                    clean_gen_j = _resample_1d(_angles_in_units(q_clean_gen[:, j], units))
                     ax.plot(
                         t_common,
                         clean_demo_j,
@@ -469,7 +493,7 @@ def plot_dmp_order_basis_grids_per_joint(
                 if r == 0:
                     ax.set_title(f"o{order}", fontsize=10)
                 if c == 0:
-                    ax.set_ylabel(f"n={n_basis}\nAngle (deg)")
+                    ax.set_ylabel(f"n={n_basis}\n{ylab}")
                 if r == n_rows - 1:
                     ax.set_xlabel("Time (normalized)")
 

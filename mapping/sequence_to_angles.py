@@ -55,11 +55,10 @@ def sequence_to_angles_rad(
         raise ValueError(
             f"Expected seq shape (T, N>=4, 3) with [left_shoulder, left_elbow, left_wrist, right_shoulder, ...], got {seq.shape}"
         )
-    # Elbow uses only the first 3 points; keep legacy shape for safety.
-    elbow_rad = elbow_flexion_rad(seq[:, :4, :])
 
-    shoulder_deg = shoulder_angles(seq, method=shoulder_method)
-    shoulder_rad = np.deg2rad(shoulder_deg)
+    angles_deg = shoulder_angles(seq, method=shoulder_method)  # (T,4) deg
+    elbow_rad = np.deg2rad(angles_deg[:, 3])
+    shoulder_rad = np.deg2rad(angles_deg[:, :3])
     return elbow_rad, shoulder_rad
 
 

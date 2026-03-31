@@ -91,6 +91,14 @@ def _array_stats_1d(x: np.ndarray) -> dict:
     }
 
 
+def _nanminmax(x: np.ndarray) -> tuple[float, float]:
+    y = np.asarray(x, dtype=float).reshape(-1)
+    y = y[np.isfinite(y)]
+    if y.size == 0:
+        return float("nan"), float("nan")
+    return float(np.min(y)), float(np.max(y))
+
+
 def _trajectory_fit_metrics(q_demo: np.ndarray, q_gen: np.ndarray) -> dict:
     """Compute fit quality metrics for one rollout."""
     err = q_gen - q_demo
@@ -231,6 +239,7 @@ def run_full_pipeline(
     n_basis_list: list[int] | None = None,
     use_keypoint_cleaning: bool = False,
     shoulder_method: str = "vector",
+    plot_units: str = "deg",
 ) -> None:
     """Run RAW vs CLEAN sweep pipeline for a single trial directory."""
     if not trial_dir.exists():
@@ -248,6 +257,7 @@ def run_full_pipeline(
     print(f"  n_basis_list:  {n_basis_list}")
     print(f"  clean_mode:    {'keypoints' if use_keypoint_cleaning else 'angles'}")
     print(f"  shoulder_method: {shoulder_method}")
+    print(f"  plot_units:      {plot_units}")
 
     generated_files: list[Path] = []
     run_report: dict = {
@@ -292,6 +302,12 @@ def run_full_pipeline(
     generated_files.append(raw_keypoints_fig)
     print("RAW: mapping sequence to joint angles...")
     raw_elbow_rad, raw_shoulder_rad = sequence_to_angles_rad(raw_seq, shoulder_method=shoulder_method)
+    raw_e_min, raw_e_max = _nanminmax(raw_elbow_rad)
+    print(
+        f"RAW: elbow flexion range: "
+        f"{raw_e_min:.4f}–{raw_e_max:.4f} rad "
+        f"({np.degrees(raw_e_min):.1f}–{np.degrees(raw_e_max):.1f} deg)"
+    )
     run_report["angles_stage"]["raw"] = {
         "elbow_shape": [int(v) for v in raw_elbow_rad.shape],
         "shoulder_shape": [int(v) for v in raw_shoulder_rad.shape],
@@ -302,7 +318,15 @@ def run_full_pipeline(
     _save_angles_npz(raw_angles_npz, raw_elbow_rad, raw_shoulder_rad)
     generated_files.append(raw_angles_npz)
     raw_angles_fig = out("angles_raw.png")
-    plot_angles_single(raw_elbow_rad, raw_shoulder_rad, raw_t, meta, raw_angles_fig, title_suffix="raw")
+    plot_angles_single(
+        raw_elbow_rad,
+        raw_shoulder_rad,
+        raw_t,
+        meta,
+        raw_angles_fig,
+        title_suffix="raw",
+        units=plot_units,
+    )
     generated_files.append(raw_angles_fig)
 
     raw_triplet = (raw_elbow_rad, raw_shoulder_rad, raw_t)
@@ -331,6 +355,12 @@ def run_full_pipeline(
                 filter_order=order,
                 target_dt=clean_target_dt,
             )
+        clean_e_min, clean_e_max = _nanminmax(elbow_rad)
+        print(
+            f"CLEAN(o{order}): elbow flexion range: "
+            f"{clean_e_min:.4f}–{clean_e_max:.4f} rad "
+            f"({np.degrees(clean_e_min):.1f}–{np.degrees(clean_e_max):.1f} deg)"
+        )
         clean_variants.append((order, elbow_rad, shoulder_rad, clean_t))
         run_report["angles_stage"]["clean_variants"][str(order)] = {
             "elbow_shape": [int(v) for v in elbow_rad.shape],
@@ -344,12 +374,20 @@ def run_full_pipeline(
         _save_angles_npz(clean_angles_npz, elbow_rad, shoulder_rad)
         generated_files.append(clean_angles_npz)
         clean_angles_fig = out(f"angles_clean_o{order}.png")
-        plot_angles_single(elbow_rad, shoulder_rad, clean_t, meta, clean_angles_fig, title_suffix=f"clean o{order}")
+        plot_angles_single(
+            elbow_rad,
+            shoulder_rad,
+            clean_t,
+            meta,
+            clean_angles_fig,
+            title_suffix=f"clean o{order}",
+            units=plot_units,
+        )
         generated_files.append(clean_angles_fig)
 
     # --- Angles overlay grid ---
     angles_overlay = out("angles_overlay_raw_vs_clean_orders.png")
-    plot_angles_overlay_grid(raw_triplet, clean_variants, meta, angles_overlay)
+    plot_angles_overlay_grid(raw_triplet, clean_variants, meta, angles_overlay, units=plot_units)
     generated_files.append(angles_overlay)
 
     # --- DMP sweep ---
@@ -392,7 +430,14 @@ def run_full_pipeline(
         }
         raw_by_basis[n_basis] = (q_raw_demo, q_raw_gen)
         raw_dmp_fig = out(f"dmp_trajectory_raw_n{n_basis}.png")
-        plot_dmp_single(q_raw_demo, q_raw_gen, meta, raw_dmp_fig, title_suffix=f"raw, n_basis={n_basis}")
+        plot_dmp_single(
+            q_raw_demo,
+            q_raw_gen,
+            meta,
+            raw_dmp_fig,
+            title_suffix=f"raw, n_basis={n_basis}",
+            units=plot_units,
+        )
         generated_files.append(raw_dmp_fig)
         raw_dmp_npz = out(f"dmp_rollout_raw_n{n_basis}.npz")
         _save_dmp_rollout_npz(raw_dmp_npz, q_raw_demo, q_raw_gen, dt=_dt, n_basis=n_basis, model=model_raw)
@@ -458,6 +503,7 @@ def run_full_pipeline(
                 meta,
                 clean_dmp_fig,
                 title_suffix=f"clean o{order}, n_basis={n_basis}",
+                units=plot_units,
             )
             generated_files.append(clean_dmp_fig)
             clean_dmp_npz = out(f"dmp_rollout_clean_o{order}_n{n_basis}.npz")
@@ -508,6 +554,7 @@ def run_full_pipeline(
             meta=meta,
             out_path=dmp_overlay_fig,
             n_basis=n_basis,
+            units=plot_units,
         )
         generated_files.append(dmp_overlay_fig)
 
@@ -520,6 +567,7 @@ def run_full_pipeline(
         meta=meta,
         out_dir=trial_dir,
         filename_prefix=f"{prefix}",
+        units=plot_units,
     )
     generated_files.extend(grid_paths)
 
@@ -607,8 +655,15 @@ def main() -> None:
         "--shoulder-method",
         type=str,
         default="vector",
-        choices=["vector", "rotmat"],
-        help="Shoulder angle method: 'vector' (legacy) or 'rotmat' (uses hand direction if available).",
+        choices=["vector", "rotmat", "ik"],
+        help="Shoulder angle method: 'vector' (legacy), 'rotmat' (uses hand direction if available), or 'ik' (optimization-based IK + constraints).",
+    )
+    parser.add_argument(
+        "--plot-units",
+        type=str,
+        default="deg",
+        choices=["deg", "rad"],
+        help="Units for plots only: 'deg' or 'rad'. (Saved trajectories remain in radians in NPZ.)",
     )
     args = parser.parse_args()
 
@@ -626,6 +681,7 @@ def main() -> None:
         n_basis_list=list(args.n_basis),
         use_keypoint_cleaning=bool(args.use_keypoint_cleaning),
         shoulder_method=str(args.shoulder_method),
+        plot_units=str(args.plot_units),
     )
 
 
