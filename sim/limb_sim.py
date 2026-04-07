@@ -82,14 +82,14 @@ def main() -> None:
     parser.add_argument(
         "--n-basis",
         type=int,
-        default=None,
-        help="If set, load the sweep rollout for this basis count (e.g. 10, 30, 60).",
+        default=30,
+        help="Basis function count to load (default: 30).",
     )
     parser.add_argument(
         "--filter-order",
         type=int,
-        default=None,
-        help="For clean sweep rollouts: filter order (required if --source clean and --n-basis is set).",
+        default=2,
+        help="For clean sweep rollouts: Butterworth filter order (default: 2).",
     )
     parser.add_argument("--loop", action="store_true", help="Loop playback.")
     parser.add_argument(
@@ -151,10 +151,17 @@ def main() -> None:
         p.disconnect()
         raise FileNotFoundError(f"URDF not found: {urdf_path}")
 
-    # Orient the standalone arm so that, at zero joint angles, the upper arm
-    # hangs down along the human body (green Y‑axis pointing downward in the
-    # PyBullet world frame).
-    base_orn = p.getQuaternionFromEuler([math.pi / 2.0, 0.0, 0.0])
+    # Orient the standalone arm so the simulation axes match `convention.md`:
+    #   +X = person's right
+    #   +Y = up
+    #   +Z = forward (out of chest)
+    #
+    # PyBullet's world uses +Z as up, so we rotate the arm base such that the
+    # arm model's +Y aligns with world +Z. With this base orientation, the
+    # "arm down" neutral pose corresponds to the upper-arm pointing along -Y
+    # in the convention frame.
+    base_orn = tuple(float(v) for v in p.getQuaternionFromEuler([math.pi/2.0, 0.0, math.pi/2.0]))
+    #base_orn = p.getQuaternionFromEuler([0.0, 0.0, 0.0])
     robot = p.loadURDF(
         urdf_rel,
         basePosition=[0, 0, 0],
@@ -203,6 +210,10 @@ def main() -> None:
     try:
         while True:
             for t_idx in range(T):
+                # If the GUI window is closed, the physics server disconnects.
+                # Exit cleanly instead of raising "Not connected to physics server".
+                if not p.isConnected():
+                    return
                 q_t = q_traj[t_idx]
 
                 elbow = float(q_t[0])
@@ -224,7 +235,8 @@ def main() -> None:
                 break
     finally:
         print("Playback finished. Close the PyBullet window to exit.")
-        p.disconnect()
+        if p.isConnected():
+            p.disconnect()
 
 
 if __name__ == "__main__":

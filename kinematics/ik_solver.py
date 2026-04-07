@@ -64,7 +64,7 @@ def fk(
     flex, abd, rot, elbow = [float(x) for x in theta]
 
     # Shoulder rotation order must be consistent with residual fitting.
-    R_sh = R_z(abd) @ R_x(flex) @ R_y(rot)
+    R_sh = R_z(abd) @ R_x(-flex) @ R_y(rot)
 
     elbow_pos = shoulder_pos + R_sh @ np.array([0.0, -L1, 0.0], dtype=np.float64)
 

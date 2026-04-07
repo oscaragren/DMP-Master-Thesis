@@ -11,13 +11,17 @@ import mediapipe as mp
 from mediapipe.tasks import python as mp_tasks
 from mediapipe.tasks.python import vision
 
-# MediaPipe Pose landmark indices: left arm + right shoulder (for trunk reference later)
-POSE_KEYPOINT_IDS = [11, 13, 15, 12]  # left_shoulder, left_elbow, left_wrist, right_shoulder
+# MediaPipe Pose landmark indices: left arm + right shoulder + left hip (for trunk reference)
+# Keep the first 4 indices stable for downstream code:
+#   0: left_shoulder, 1: left_elbow, 2: left_wrist, 3: right_shoulder, 4: left_hip, 5: right_hip
+POSE_KEYPOINT_IDS = [11, 13, 15, 12, 23, 24]
 POSE_KEYPOINT_NAMES = {
     11: "left_shoulder",
     13: "left_elbow",
     15: "left_wrist",
     12: "right_shoulder",
+    23: "left_hip",
+    24: "right_hip",
 }
 
 RGB_SOCKET = dai.CameraBoardSocket.CAM_A
@@ -100,7 +104,7 @@ def main():
         min_tracking_confidence=0.5,
     )
 
-    all_frames = []  # List of (4, 3) np.ndarray: x,y,z of left_shoulder, left_elbow, left_wrist, right_shoulder
+    all_frames = []  # List of (N, 3) np.ndarray: x,y,z of selected keypoints (POSE_KEYPOINT_IDS)
     all_t = [] # device timestamps (seconds)
     all_json = [] # optional
 

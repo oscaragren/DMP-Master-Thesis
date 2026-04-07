@@ -70,6 +70,17 @@ def plot_angles_single(
     *,
     units: str = "deg",
 ) -> None:
+    """
+    Plot the angles for the left arm.
+    Args:
+        elbow_rad: np.ndarray: the elbow flexion angles in radians
+        shoulder_rad: np.ndarray: the shoulder angles in radians
+        t: np.ndarray: the time in seconds
+        meta: dict: the metadata
+        out_path: Path: the path to save the plot
+        title_suffix: str: the suffix for the title
+        units: str: the units to use for the plot
+    """
     elbow_u = _angles_in_units(elbow_rad, units)
     shoulder_u = _ensure_2d(_angles_in_units(shoulder_rad, units))
     ylab = _angle_ylabel(units)
@@ -252,6 +263,16 @@ def plot_dmp_single(
     *,
     units: str = "deg",
 ) -> None:
+    """
+
+    Args:
+        q_demo: np.ndarray: the demonstrated trajectory
+        q_gen: np.ndarray: the generated trajectory
+        meta: dict: the metadata
+        out_path: Path: the path to save the plot
+        title_suffix: str: the suffix for the title
+        units: str: the units to use for the plot
+    """
     joint_names = [
         "Elbow flexion",
         "Shoulder flexion",

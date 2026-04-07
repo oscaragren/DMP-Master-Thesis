@@ -1,21 +1,15 @@
-"""
-Spawn the standalone left arm (limb) in PyBullet and hold it fixed.
-
-This script mirrors the arm-loading "starting pose" from `sim/limb_sim.py`
-(same URDF + base orientation), but does **not** play any trajectory.
-Instead it keeps the arm fixed at its starting joint configuration.
-"""
-import time
 import math
 from pathlib import Path
+import time
 
 import pybullet as p
 
 
-def get_project_root() -> Path:
-    """Return project root (parent of sim/)."""
-    sim_dir = Path(__file__).resolve().parent
-    return sim_dir.parent
+"""
+Spawn the standalone left arm (limb) in PyBullet and sweep elbow flexion.
+
+This is a small debugging script for joint axes and basic motion.
+"""
 
 
 def joint_index(body_uid: int, joint_name: str) -> int:
@@ -66,8 +60,30 @@ def _world_joint_axis(robot: int, joint_idx: int) -> tuple[float, float, float]:
     return _rotate_vec_by_quat(joint_axis, joint_world_orn)
 
 
+def _quat_from_axis_angle(axis: tuple[float, float, float], angle_rad: float) -> tuple[float, float, float, float]:
+    ax, ay, az = axis
+    n = math.sqrt(ax * ax + ay * ay + az * az)
+    if n <= 1e-12:
+        return (0.0, 0.0, 0.0, 1.0)
+    ax /= n
+    ay /= n
+    az /= n
+    s = math.sin(0.5 * angle_rad)
+    c = math.cos(0.5 * angle_rad)
+    return (ax * s, ay * s, az * s, c)
+
+def _quat_conjugate(q: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
+    x, y, z, w = q
+    return (-x, -y, -z, w)
+
+def _arm_base_orientation() -> tuple[float, float, float, float]:
+    # 1) "Hang" rotation so the arm looks anatomical at zero joint angles.
+    q_hang = tuple(float(v) for v in p.getQuaternionFromEuler([math.pi/2.0, 0.0, math.pi/2.0]))
+
+    return q_hang
+
+
 def main() -> None:
-    project_root = get_project_root()
     sim_dir = Path(__file__).resolve().parent
 
     # 1) Start PyBullet GUI and load the standalone arm URDF
@@ -81,10 +97,7 @@ def main() -> None:
         p.disconnect()
         raise FileNotFoundError(f"URDF not found: {urdf_path}")
 
-    # For axis debugging, keep the model frame aligned with world (no base rotation).
-    # (limb_sim uses a -pi/2 X-rotation to make the arm "hang" anatomically at zero angles.)
-    base_orn = p.getQuaternionFromEuler([math.pi/2, 0.0, 0.0])
-    #base_orn = p.getQuaternionFromEuler([-math.pi / 2.0, 0.0, 0.0])
+    base_orn = tuple(float(v) for v in p.getQuaternionFromEuler([math.pi/2.0, 0.0, math.pi/2.0]))
     robot = p.loadURDF(
         urdf_rel,
         basePosition=[0, 0, 0],
@@ -96,16 +109,10 @@ def main() -> None:
     num_joints = p.getNumJoints(robot)
     q0 = [float(p.getJointState(robot, j)[0]) for j in range(num_joints)]
 
-    # 3) Drive only shoulder abduction/adduction (within its joint limits).
-    sh_rotz = joint_index(robot, "jLeftShoulder_rotz")
-    jinfo = p.getJointInfo(robot, sh_rotz)
-    lo = float(jinfo[8])
-    hi = float(jinfo[9])
-    if not (lo < hi):
-        # If URDF reports no limits, use a conservative default range.
-        lo, hi = -math.pi / 2.0, math.pi / 2.0
-    mid = 0.5 * (lo + hi)
-    amp = 0.475 * (hi - lo)  # stay slightly inside the limits
+    # 3) Drive elbow flexion from 90 deg to 40 deg (and back), repeatedly.
+    elbow_roty = joint_index(robot, "jLeftElbow_roty")
+    elbow_hi = math.radians(90.0)
+    elbow_lo = math.radians(40.0)
 
     # 4) Hold the starting pose with position control for all joints.
     for j in range(num_joints):
@@ -118,6 +125,7 @@ def main() -> None:
         )
 
     # Quick confirmation: print shoulder joint axes in URDF frame and in world frame.
+    sh_rotz = joint_index(robot, "jLeftShoulder_rotz")
     sh_rotx = joint_index(robot, "jLeftShoulder_rotx")
     sh_roty = joint_index(robot, "jLeftShoulder_roty")
     print("Shoulder joint axis check (URDF axis -> world axis):")
@@ -132,17 +140,23 @@ def main() -> None:
         print(f"  {name}: {urdf_axis} -> {tuple(round(a, 3) for a in world_axis)}")
 
     print(
-        f"Standalone left arm loaded. Rotating shoulder abduction/adduction ({lo:.3f}..{hi:.3f} rad). "
+        f"Standalone left arm loaded. Sweeping elbow flexion ({elbow_hi:.3f} -> {elbow_lo:.3f} rad). "
         "Close the GUI window to exit."
     )
     try:
         t0 = time.time()
         while True:
+            # If the GUI window is closed, the physics server disconnects.
+            # Exit cleanly instead of raising "Not connected to physics server".
+            if not p.isConnected():
+                break
             t = time.time() - t0
-            target = mid + amp * math.sin(2.0 * math.pi * 0.15 * t)  # 0.15 Hz
+            # Smooth periodic sweep: maps sin() to [elbow_lo, elbow_hi].
+            s = 0.5 * (1.0 + math.sin(2.0 * math.pi * 0.15 * t))  # 0..1
+            target = elbow_hi + (elbow_lo - elbow_hi) * s
             p.setJointMotorControl2(
                 robot,
-                sh_rotz,
+                elbow_roty,
                 p.POSITION_CONTROL,
                 targetPosition=float(target),
                 force=50.0,
@@ -150,7 +164,8 @@ def main() -> None:
             p.stepSimulation()
             time.sleep(1.0 / 240.0)
     finally:
-        p.disconnect()
+        if p.isConnected():
+            p.disconnect()
 
 
 if __name__ == "__main__":

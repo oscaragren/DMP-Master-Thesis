@@ -239,6 +239,7 @@ def run_full_pipeline(
     n_basis_list: list[int] | None = None,
     use_keypoint_cleaning: bool = False,
     shoulder_method: str = "vector",
+    ik_use_trunk_frame: bool = False,
     plot_units: str = "deg",
 ) -> None:
     """Run RAW vs CLEAN sweep pipeline for a single trial directory."""
@@ -257,6 +258,7 @@ def run_full_pipeline(
     print(f"  n_basis_list:  {n_basis_list}")
     print(f"  clean_mode:    {'keypoints' if use_keypoint_cleaning else 'angles'}")
     print(f"  shoulder_method: {shoulder_method}")
+    print(f"  ik_use_trunk_frame: {bool(ik_use_trunk_frame)}")
     print(f"  plot_units:      {plot_units}")
 
     generated_files: list[Path] = []
@@ -272,6 +274,7 @@ def run_full_pipeline(
             "n_basis_list": [int(v) for v in n_basis_list],
             "clean_mode": "keypoints" if use_keypoint_cleaning else "angles",
             "shoulder_method": str(shoulder_method),
+            "ik_use_trunk_frame": bool(ik_use_trunk_frame),
             "dmp": {
                 "tau": float(DMP_TAU),
                 "alpha_canonical": float(DMP_ALPHA_CANONICAL),
@@ -301,7 +304,11 @@ def run_full_pipeline(
     plot_3d_trajectory(raw_seq, raw_t, meta, raw_keypoints_fig)
     generated_files.append(raw_keypoints_fig)
     print("RAW: mapping sequence to joint angles...")
-    raw_elbow_rad, raw_shoulder_rad = sequence_to_angles_rad(raw_seq, shoulder_method=shoulder_method)
+    raw_elbow_rad, raw_shoulder_rad = sequence_to_angles_rad(
+        raw_seq,
+        shoulder_method=shoulder_method,
+        ik_use_trunk_frame=bool(ik_use_trunk_frame),
+    )
     raw_e_min, raw_e_max = _nanminmax(raw_elbow_rad)
     print(
         f"RAW: elbow flexion range: "
@@ -344,7 +351,11 @@ def run_full_pipeline(
             )
             clean_seq, clean_t = _load_clean_seq_t(trial_dir)
             print(f"CLEAN(o{order}): mapping sequence to joint angles...")
-            elbow_rad, shoulder_rad = sequence_to_angles_rad(clean_seq, shoulder_method=shoulder_method)
+            elbow_rad, shoulder_rad = sequence_to_angles_rad(
+                clean_seq,
+                shoulder_method=shoulder_method,
+                ik_use_trunk_frame=bool(ik_use_trunk_frame),
+            )
         else:
             print(f"CLEAN(o{order}): cleaning in joint-angle space...")
             elbow_rad, shoulder_rad, clean_t = clean_angles_trajectory(
@@ -636,7 +647,7 @@ def main() -> None:
         "--filter-orders",
         type=int,
         nargs="+",
-        default=[1, 2, 4, 6, 10],
+        default=[1, 2, 4, 6],
         help="Filter orders to sweep for cleaning (default: 1 2 4 6)",
     )
     parser.add_argument(
@@ -644,7 +655,7 @@ def main() -> None:
         type=int,
         nargs="+",
         default=[10, 30, 60, 100],
-        help="Basis function counts to sweep for DMP (default: 10 30 60)",
+        help="Basis function counts to sweep for DMP (default: 10 30 60 100)",
     )
     parser.add_argument(
         "--use-keypoint-cleaning",
@@ -657,6 +668,11 @@ def main() -> None:
         default="vector",
         choices=["vector", "rotmat", "ik"],
         help="Shoulder angle method: 'vector' (legacy), 'rotmat' (uses hand direction if available), or 'ik' (optimization-based IK + constraints).",
+    )
+    parser.add_argument(
+        "--ik-use-trunk-frame",
+        action="store_true",
+        help="When --shoulder-method ik: transform [shoulder, elbow, wrist] into a per-frame trunk frame (built from left/right shoulders) before solving IK.",
     )
     parser.add_argument(
         "--plot-units",
@@ -681,6 +697,7 @@ def main() -> None:
         n_basis_list=list(args.n_basis),
         use_keypoint_cleaning=bool(args.use_keypoint_cleaning),
         shoulder_method=str(args.shoulder_method),
+        ik_use_trunk_frame=bool(args.ik_use_trunk_frame),
         plot_units=str(args.plot_units),
     )
 

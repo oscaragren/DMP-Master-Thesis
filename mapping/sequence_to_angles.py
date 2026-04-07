@@ -22,9 +22,9 @@ if __name__ == "__main__":
         sys.path.insert(0, str(_root))
 
 from kinematics.left_arm_angles import (
-    elbow_flexion_deg,
-    elbow_flexion_rad,
-    shoulder_angles,
+    #elbow_flexion_deg,
+    #elbow_flexion_rad,
+    shoulder_angles
 )
 
 
@@ -32,6 +32,7 @@ def sequence_to_angles_rad(
     seq: np.ndarray,
     *,
     shoulder_method: str = "vector",
+    ik_use_trunk_frame: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Convert a left-arm 3D sequence to elbow and shoulder angles in **radians**.
@@ -56,7 +57,11 @@ def sequence_to_angles_rad(
             f"Expected seq shape (T, N>=4, 3) with [left_shoulder, left_elbow, left_wrist, right_shoulder, ...], got {seq.shape}"
         )
 
-    angles_deg = shoulder_angles(seq, method=shoulder_method)  # (T,4) deg
+    angles_deg = shoulder_angles(
+        seq,
+        method=shoulder_method,
+        ik_use_trunk_frame=bool(ik_use_trunk_frame),
+    )  # (T,4) deg
     elbow_rad = np.deg2rad(angles_deg[:, 3])
     shoulder_rad = np.deg2rad(angles_deg[:, :3])
     return elbow_rad, shoulder_rad
