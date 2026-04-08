@@ -59,11 +59,12 @@ def interpolate_nan(angles: np.ndarray) -> np.ndarray:
 def main():
     
     # Load the data
-    seq, t = _load_raw_seq_t(Path("test_data/processed/subject_01/reach/trial_040"))
-    meta = _load_meta(Path("test_data/processed/subject_01/reach/trial_040"))
+    trial_dir = Path("test_data/processed/subject_03/random/trial_003")
+    seq, t = _load_raw_seq_t(trial_dir)
+    meta = _load_meta(trial_dir)
 
     # Plot the 3D trajectory
-    plot_3d_trajectory(seq, t, meta, Path("test_data/processed/subject_01/reach/trial_040/keypoints_raw_trajectory.png"))
+    plot_3d_trajectory(seq, t, meta, trial_dir / "keypoints_raw_trajectory.png")
 
     # Convert to angles
     angles = get_angles(seq) # angles: [elbow flexion, shoulder flexion, shoulder abduction, shoulder lateral medial rotation]
@@ -75,9 +76,35 @@ def main():
     #print(f"Shoulder abduction: {angles[:, 2]}")
     #print(f"Shoulder lateral medial rotation: {angles[:, 3]}")
 
+    # Preserve degree values before converting to radians (useful for plotting + exports).
+    angles_deg = angles
+    clean_angles_deg = clean_angles
+
     # Convert to radians
-    angles = np.deg2rad(angles)
-    clean_angles = np.deg2rad(clean_angles)
+    angles = np.deg2rad(angles_deg)
+    clean_angles = np.deg2rad(clean_angles_deg)
+
+    # Export angles for simulation/analysis
+    np.savez(
+        trial_dir / "angles_raw.npz",
+        angles_rad=angles,
+        angles_deg=angles_deg,
+        elbow_rad=angles[:, 0],
+        shoulder_rad=angles[:, 1:4],
+        elbow_deg=angles_deg[:, 0],
+        shoulder_deg=angles_deg[:, 1:4],
+        t=t,
+    )
+    np.savez(
+        trial_dir / "angles_clean.npz",
+        angles_rad=clean_angles,
+        angles_deg=clean_angles_deg,
+        elbow_rad=clean_angles[:, 0],
+        shoulder_rad=clean_angles[:, 1:4],
+        elbow_deg=clean_angles_deg[:, 0],
+        shoulder_deg=clean_angles_deg[:, 1:4],
+        t=t,
+    )
 
     # Plot the angles
     plot_angles_single(
@@ -87,7 +114,7 @@ def main():
         meta=meta,
         title_suffix="raw",
         units="deg",
-        out_path=Path("test_data/processed/subject_01/reach/trial_040/angles.png")
+        out_path=trial_dir / "angles.png"
     )
     plot_angles_single(
         elbow_rad=clean_angles[:, 0], # elbow flexion
@@ -96,15 +123,39 @@ def main():
         meta=meta,
         title_suffix="raw",
         units="deg",
-        out_path=Path("test_data/processed/subject_01/reach/trial_040/clean_angles.png")
+        out_path=trial_dir / "clean_angles.png"
     )
     
     # Fit DMP 
-    model_raw = fit([angles], tau=1.0, dt=1.0/(angles.shape[0]-1), n_basis_functions=100, alpha_canonical=4.0, alpha_transformation=25.0, beta_transformation=6.25)
-    q_gen_raw = rollout_simple(model_raw, angles[0], angles[-1], tau=1.0, dt=1.0/(angles.shape[0]-1))
+    dt = 1.0 / (angles.shape[0] - 1)
+    model_raw = fit([angles], tau=1.0, dt=dt, n_basis_functions=100, alpha_canonical=4.0, alpha_transformation=25.0, beta_transformation=6.25)
+    q_gen_raw = rollout_simple(model_raw, angles[0], angles[-1], tau=1.0, dt=dt)
     
-    model_clean = fit([clean_angles], tau=1.0, dt=1.0/(clean_angles.shape[0]-1), n_basis_functions=100, alpha_canonical=4.0, alpha_transformation=25.0, beta_transformation=6.25)
-    q_gen_clean = rollout_simple(model_clean, clean_angles[0], clean_angles[-1], tau=1.0, dt=1.0/(clean_angles.shape[0]-1))
+    dt_clean = 1.0 / (clean_angles.shape[0] - 1)
+    model_clean = fit([clean_angles], tau=1.0, dt=dt_clean, n_basis_functions=100, alpha_canonical=4.0, alpha_transformation=25.0, beta_transformation=6.25)
+    q_gen_clean = rollout_simple(model_clean, clean_angles[0], clean_angles[-1], tau=1.0, dt=dt_clean)
+
+    # Export rollouts for simulation/analysis
+    np.savez(
+        trial_dir / "dmp_rollout_raw.npz",
+        q_demo=angles,
+        q_gen=q_gen_raw,
+        q_gen_rad=q_gen_raw,
+        t=t,
+        dt=dt,
+        q0=angles[0],
+        qT=angles[-1],
+    )
+    np.savez(
+        trial_dir / "dmp_rollout_clean.npz",
+        q_demo=clean_angles,
+        q_gen=q_gen_clean,
+        q_gen_rad=q_gen_clean,
+        t=t,
+        dt=dt_clean,
+        q0=clean_angles[0],
+        qT=clean_angles[-1],
+    )
 
     # Plot the generated DMP trajectory
     plot_dmp_single(
@@ -113,7 +164,7 @@ def main():
         meta=meta,
         title_suffix="raw",
         units="deg",
-        out_path=Path("test_data/processed/subject_01/reach/trial_040/dmp_trajectory_raw.png")
+        out_path=trial_dir / "dmp_trajectory_raw.png"
     )
 
     plot_dmp_single(
@@ -122,7 +173,7 @@ def main():
         meta=meta,
         title_suffix="clean",
         units="deg",
-        out_path=Path("test_data/processed/subject_01/reach/trial_040/dmp_trajectory_clean.png")
+        out_path=trial_dir / "dmp_trajectory_clean.png"
     )
 
 

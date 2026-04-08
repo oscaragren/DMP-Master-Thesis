@@ -56,8 +56,9 @@ def _centers_and_widths(alpha_canonical: float, n_basis_functions: int) -> tuple
     if n_basis_functions <= 1:
         widths = np.array([1.0], dtype=np.float64)
     else:
-        widths = np.diff(centers)
-        widths = np.hstack((widths, [widths[-1]]))
+        d = np.diff(centers)
+        d = np.hstack((d, [d[-1]]))
+        widths = 1.0 / (d ** 2 + 1e-12)
     return centers, widths
 
 def savgol_estimation(
@@ -278,7 +279,7 @@ def fit(
 
     # 3. Get center and width for the basis functions (in phase-space)
     centers, widths = _centers_and_widths(alpha_canonical, n_basis_functions)
-    phi = _rbf_normalized(x, centers, widths)
+    phi = _rbf_normalized(x, centers, widths) * x[:, None]
 
     # 4. Solve LWR weights
     ridge_lambda = 1e-6

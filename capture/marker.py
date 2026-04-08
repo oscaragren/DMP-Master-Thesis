@@ -13,10 +13,25 @@ RGB_SOCKET = dai.CameraBoardSocket.CAM_A
 LEFT_SOCKET = dai.CameraBoardSocket.CAM_B
 RIGHT_SOCKET = dai.CameraBoardSocket.CAM_C
 
-# Matte blue marker defaults (HSV in OpenCV: H∈[0,180], S,V∈[0,255])
-# Tune with --hsv-* args if lighting differs.
+# HSV in OpenCV: H∈[0,180], S,V∈[0,255]. Tune per lighting.
+# Note: variable names reflect *physical marker color*.
+DEFAULT_GREEN_HSV_LO = (35, 80, 80)
+DEFAULT_GREEN_HSV_HI = (85, 255, 255)
 DEFAULT_BLUE_HSV_LO = (95, 80, 60)
 DEFAULT_BLUE_HSV_HI = (125, 255, 255)
+
+# Drawing colors (OpenCV uses BGR).
+DRAW_GREEN = (0, 255, 0)
+DRAW_BLUE = (255, 0, 0)
+
+
+def _norm(v: np.ndarray, eps: float = 1e-9) -> float:
+    return float(np.linalg.norm(v) + eps)
+
+
+def _unit(v: np.ndarray, eps: float = 1e-9) -> np.ndarray:
+    n = _norm(v, eps=eps)
+    return v / n
 
 
 def deproject(u: float, v: float, z_m: float, fx: float, fy: float, cx: float, cy: float):
@@ -46,7 +61,7 @@ def depth_at(depth_mm: np.ndarray, u: float, v: float, patch: int = 7):
     return float(np.median(roi)) / 1000.0  # mm -> m
 
 
-def _detect_best_colored_circle(
+def _detect_colored_circles(
     frame_bgr: np.ndarray,
     *,
     hsv_lo: tuple[int, int, int],
@@ -54,10 +69,17 @@ def _detect_best_colored_circle(
     morph_ksize: int,
     min_area: float,
     min_circularity: float,
+    max_markers: int | None = None,
+    min_radius: float | None = None,
+    max_radius: float | None = None,
+    min_fill_ratio: float | None = None,
 ):
     """
-    Detect a colored circular blob and return (u, v, r, mask) or None.
-    Uses HSV thresholding + morphology + contour circularity + minEnclosingCircle.
+    Detect colored circular blobs.
+
+    Returns (detections, mask) where detections is a list of dicts:
+      { "u","v","r","area","circularity","fill","score" }
+    Sorted by descending score (area * circularity).
     """
     hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
     lo = np.array(hsv_lo, dtype=np.uint8)
@@ -73,10 +95,9 @@ def _detect_best_colored_circle(
 
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
-        return None
+        return [], mask
 
-    best = None
-    best_score = -1.0
+    dets: list[dict] = []
     for cnt in contours:
         area = float(cv2.contourArea(cnt))
         if area < float(min_area):
@@ -91,16 +112,214 @@ def _detect_best_colored_circle(
             continue
 
         (x, y), radius = cv2.minEnclosingCircle(cnt)
-        score = area * circularity
-        if score > best_score:
-            best_score = score
-            best = (float(x), float(y), float(radius), mask)
+        if min_radius is not None and float(radius) < float(min_radius):
+            continue
+        if max_radius is not None and float(radius) > float(max_radius):
+            continue
 
-    return best
+        circle_area = float(np.pi * float(radius) * float(radius))
+        fill = float(area / circle_area) if circle_area > 1e-9 else 0.0
+        if min_fill_ratio is not None and fill < float(min_fill_ratio):
+            continue
+
+        score = area * circularity
+        dets.append(
+            {
+                "u": float(x),
+                "v": float(y),
+                "r": float(radius),
+                "area": area,
+                "circularity": circularity,
+                "fill": fill,
+                "score": score,
+            }
+        )
+
+    dets.sort(key=lambda d: float(d["score"]), reverse=True)
+    if max_markers is not None:
+        mm = int(max_markers)
+        if mm >= 0:
+            dets = dets[:mm]
+    return dets, mask
+
+
+def detect_markers_2d(
+    frame_bgr: np.ndarray,
+    *,
+    hsv_lo: tuple[int, int, int],
+    hsv_hi: tuple[int, int, int],
+    morph_ksize: int = 5,
+    min_area: float = 120.0,
+    min_circularity: float = 0.7,
+    max_markers: int | None = None,
+    min_radius: float | None = None,
+    max_radius: float | None = None,
+    min_fill_ratio: float | None = 0.55,
+):
+    """Detect circular color markers in 2D (no depth)."""
+    return _detect_colored_circles(
+        frame_bgr,
+        hsv_lo=hsv_lo,
+        hsv_hi=hsv_hi,
+        morph_ksize=morph_ksize,
+        min_area=min_area,
+        min_circularity=min_circularity,
+        max_markers=max_markers,
+        min_radius=min_radius,
+        max_radius=max_radius,
+        min_fill_ratio=min_fill_ratio,
+    )
+
+
+def attach_depth_xyz(
+    dets_2d: list[dict],
+    *,
+    depth_mm: np.ndarray,
+    fx: float,
+    fy: float,
+    cx: float,
+    cy: float,
+    patch: int = 7,
+    min_z: float = 0.05,
+    max_z: float = 15.0,
+):
+    """Attach z + XYZ to each 2D detection; returns a new list."""
+    out: list[dict] = []
+    for d in dets_2d:
+        u, v = float(d["u"]), float(d["v"])
+        z_m = depth_at(depth_mm, u, v, patch=patch)
+        if z_m is not None and float(min_z) <= float(z_m) <= float(max_z):
+            xyz = deproject(u, v, float(z_m), float(fx), float(fy), float(cx), float(cy))
+        else:
+            xyz = None
+
+        dd = dict(d)
+        dd["z_m"] = float(z_m) if z_m is not None else None
+        dd["xyz"] = xyz
+        out.append(dd)
+    return out
+
+
+def detect_blue_green_markers(
+    frame_bgr: np.ndarray,
+    *,
+    depth_mm: np.ndarray | None,
+    fx: float | None = None,
+    fy: float | None = None,
+    cx: float | None = None,
+    cy: float | None = None,
+    patch: int = 7,
+    min_z: float = 0.05,
+    max_z: float = 15.0,
+    blue_hsv_lo: tuple[int, int, int] = DEFAULT_BLUE_HSV_LO,
+    blue_hsv_hi: tuple[int, int, int] = DEFAULT_BLUE_HSV_HI,
+    green_hsv_lo: tuple[int, int, int] = DEFAULT_GREEN_HSV_LO,
+    green_hsv_hi: tuple[int, int, int] = DEFAULT_GREEN_HSV_HI,
+    morph_ksize: int = 5,
+    min_area: float = 120.0,
+    min_circularity: float = 0.7,
+    max_markers_each: int | None = 10,
+    min_radius: float | None = None,
+    max_radius: float | None = None,
+    min_fill_ratio: float | None = 0.55,
+):
+    """
+    Detect blue + green circular markers.
+
+    Returns:
+      (blue_dets, green_dets, masks) where masks is {"blue": mask, "green": mask}
+    Each det includes u,v,r,... and (if depth provided) z_m + xyz.
+    """
+    blue_2d, blue_mask = detect_markers_2d(
+        frame_bgr,
+        hsv_lo=blue_hsv_lo,
+        hsv_hi=blue_hsv_hi,
+        morph_ksize=morph_ksize,
+        min_area=min_area,
+        min_circularity=min_circularity,
+        max_markers=max_markers_each,
+        min_radius=min_radius,
+        max_radius=max_radius,
+        min_fill_ratio=min_fill_ratio,
+    )
+    green_2d, green_mask = detect_markers_2d(
+        frame_bgr,
+        hsv_lo=green_hsv_lo,
+        hsv_hi=green_hsv_hi,
+        morph_ksize=morph_ksize,
+        min_area=min_area,
+        min_circularity=min_circularity,
+        max_markers=max_markers_each,
+        min_radius=min_radius,
+        max_radius=max_radius,
+        min_fill_ratio=min_fill_ratio,
+    )
+
+    if depth_mm is not None:
+        if fx is None or fy is None or cx is None or cy is None:
+            raise ValueError("fx, fy, cx, cy must be provided when depth_mm is provided")
+        blue = attach_depth_xyz(blue_2d, depth_mm=depth_mm, fx=fx, fy=fy, cx=cx, cy=cy, patch=patch, min_z=min_z, max_z=max_z)
+        green = attach_depth_xyz(green_2d, depth_mm=depth_mm, fx=fx, fy=fy, cx=cx, cy=cy, patch=patch, min_z=min_z, max_z=max_z)
+    else:
+        blue, green = blue_2d, green_2d
+
+    return blue, green, {"blue": blue_mask, "green": green_mask}
+
+
+def assign_blue_joints_by_vertical(blue_dets: list[dict]):
+    """
+    Heuristic for single front view: sort by image y (v).
+
+    Returns dict with keys shoulder/elbow/wrist if >=3 detections, else {}.
+    """
+    if len(blue_dets) < 3:
+        return {}
+    sel = sorted(blue_dets, key=lambda d: float(d["v"]))[:3]
+    return {"shoulder": sel[0], "elbow": sel[1], "wrist": sel[2]}
+
+
+def estimate_upper_arm_frame_from_green(
+    *,
+    shoulder_xyz: tuple[float, float, float],
+    elbow_xyz: tuple[float, float, float],
+    green_xyz: list[tuple[float, float, float]],
+):
+    """
+    Build a simple right-handed frame for the upper arm.
+
+    - y-axis: humerus axis (shoulder -> elbow)
+    - x-axis: in marker plane, perpendicular to y (derived from green-plane normal)
+    - z-axis: completes right-handed frame
+
+    Returns: (R, origin) where R is 3x3 with columns [x y z] in camera coords.
+    """
+    if len(green_xyz) < 3:
+        return None
+
+    s = np.array(shoulder_xyz, dtype=np.float64)
+    e = np.array(elbow_xyz, dtype=np.float64)
+    y = _unit(e - s)
+
+    g1 = np.array(green_xyz[0], dtype=np.float64)
+    g2 = np.array(green_xyz[1], dtype=np.float64)
+    g3 = np.array(green_xyz[2], dtype=np.float64)
+    n = np.cross(g2 - g1, g3 - g1)
+    if _norm(n) < 1e-6:
+        return None
+    n = _unit(n)
+
+    x = np.cross(n, y)
+    if _norm(x) < 1e-6:
+        return None
+    x = _unit(x)
+    z = _unit(np.cross(y, x))
+
+    R = np.stack([x, y, z], axis=1)  # columns
+    return R, tuple(float(v) for v in s)
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Detect circular marker in RGB, read aligned depth, output 3D XYZ (DepthAI v3).")
+    ap = argparse.ArgumentParser(description="Detect circular markers (blue/green) in RGB, read aligned depth, output 3D XYZ (DepthAI v3).")
     ap.add_argument("--fps", type=int, default=30)
     ap.add_argument("--width", type=int, default=640)
     ap.add_argument("--height", type=int, default=400)
@@ -108,14 +327,20 @@ def main():
     ap.add_argument("--min-z", type=float, default=0.05, help="Min valid depth (m)")
     ap.add_argument("--max-z", type=float, default=15.0, help="Max valid depth (m)")
     ap.add_argument("--no-show", action="store_true", help="Run headless (no imshow)")
-    ap.add_argument("--show-mask", action="store_true", help="Show HSV mask window (debug)")
+    ap.add_argument("--show-mask", action="store_true", help="Show HSV mask windows (debug)")
 
-    # Color segmentation defaults for a matte blue marker
-    ap.add_argument("--hsv-lo", type=int, nargs=3, default=list(DEFAULT_BLUE_HSV_LO), metavar=("H", "S", "V"))
-    ap.add_argument("--hsv-hi", type=int, nargs=3, default=list(DEFAULT_BLUE_HSV_HI), metavar=("H", "S", "V"))
+    ap.add_argument("--blue-hsv-lo", type=int, nargs=3, default=list(DEFAULT_BLUE_HSV_LO), metavar=("H", "S", "V"))
+    ap.add_argument("--blue-hsv-hi", type=int, nargs=3, default=list(DEFAULT_BLUE_HSV_HI), metavar=("H", "S", "V"))
+    ap.add_argument("--green-hsv-lo", type=int, nargs=3, default=list(DEFAULT_GREEN_HSV_LO), metavar=("H", "S", "V"))
+    ap.add_argument("--green-hsv-hi", type=int, nargs=3, default=list(DEFAULT_GREEN_HSV_HI), metavar=("H", "S", "V"))
+
     ap.add_argument("--morph-ksize", type=int, default=5, help="Morphology kernel size (odd)")
     ap.add_argument("--min-area", type=float, default=120.0, help="Min blob area in pixels")
-    ap.add_argument("--min-circularity", type=float, default=0.6, help="Min contour circularity [0..1]")
+    ap.add_argument("--min-circularity", type=float, default=0.7, help="Min contour circularity [0..1]")
+    ap.add_argument("--min-fill", type=float, default=0.55, help="Min fill ratio area/(pi*r^2)")
+    ap.add_argument("--min-radius", type=float, default=4.0, help="Min circle radius (px)")
+    ap.add_argument("--max-radius", type=float, default=200.0, help="Max circle radius (px)")
+    ap.add_argument("--max-markers", type=int, default=10, help="Max markers per color to report/draw (sorted by score)")
     args = ap.parse_args()
 
     show = not args.no_show
@@ -166,57 +391,73 @@ def main():
             frame_bgr = frame_rgb.getCvFrame()
             depth_mm = frame_depth.getFrame()
 
-            det = _detect_best_colored_circle(
+            blue, green, masks = detect_blue_green_markers(
                 frame_bgr,
-                hsv_lo=tuple(int(x) for x in args.hsv_lo),
-                hsv_hi=tuple(int(x) for x in args.hsv_hi),
+                depth_mm=depth_mm,
+                fx=fx,
+                fy=fy,
+                cx=cx,
+                cy=cy,
+                patch=int(args.patch),
+                min_z=float(args.min_z),
+                max_z=float(args.max_z),
+                blue_hsv_lo=tuple(int(x) for x in args.blue_hsv_lo),
+                blue_hsv_hi=tuple(int(x) for x in args.blue_hsv_hi),
+                green_hsv_lo=tuple(int(x) for x in args.green_hsv_lo),
+                green_hsv_hi=tuple(int(x) for x in args.green_hsv_hi),
                 morph_ksize=int(args.morph_ksize),
                 min_area=float(args.min_area),
                 min_circularity=float(args.min_circularity),
+                max_markers_each=int(args.max_markers),
+                min_radius=float(args.min_radius) if args.min_radius is not None else None,
+                max_radius=float(args.max_radius) if args.max_radius is not None else None,
+                min_fill_ratio=float(args.min_fill),
             )
 
             vis = frame_bgr.copy() if show else None
-            xyz = None
-            mask = None
-            if det is not None:
-                u, v, r, mask = det
-                z_m = depth_at(depth_mm, u, v, patch=args.patch)
-                if z_m is not None and args.min_z <= z_m <= args.max_z:
-                    xyz = deproject(u, v, z_m, fx, fy, cx, cy)
+            xyz_list: list[tuple[str, int, tuple[float, float, float]] | None] = []
+            overlay_rows = 0
+            for color_name, dets, draw_color in (("blue", blue, DRAW_BLUE), ("green", green, DRAW_GREEN)):
+                for i, d in enumerate(dets):
+                    u, v, r = float(d["u"]), float(d["v"]), float(d["r"])
+                    xyz = d.get("xyz")
+                    if isinstance(xyz, tuple):
+                        xyz_list.append((color_name, i, xyz))
 
-                if show:
-                    draw_color = (255, 0, 0)  # BGR: blue
-                    cv2.circle(vis, (int(round(u)), int(round(v))), int(round(r)), draw_color, 2)
-                    cv2.circle(vis, (int(round(u)), int(round(v))), 3, (0, 0, 255), -1)
-                    cv2.rectangle(
-                        vis,
-                        (int(round(u - args.patch // 2)), int(round(v - args.patch // 2))),
-                        (int(round(u + args.patch // 2)), int(round(v + args.patch // 2))),
-                        draw_color,
-                        1,
-                    )
-                    label = f"u={u:.1f} v={v:.1f} r={r:.1f}"
-                    if xyz is not None:
-                        x, y, z = xyz
-                        label += f" | X={x:.3f} Y={y:.3f} Z={z:.3f} m"
-                    else:
-                        label += " | depth invalid"
-                    cv2.putText(vis, label, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, draw_color, 2, cv2.LINE_AA)
+                    if show:
+                        cv2.circle(vis, (int(round(u)), int(round(v))), int(round(r)), draw_color, 2)
+                        cv2.circle(vis, (int(round(u)), int(round(v))), 3, (0, 0, 255), -1)
+                        label = f"{color_name}[{i}] u={u:.1f} v={v:.1f} r={r:.1f}"
+                        if isinstance(xyz, tuple):
+                            x, y, z = xyz
+                            label += f" | X={x:.3f} Y={y:.3f} Z={z:.3f} m"
+                        else:
+                            label += " | depth invalid"
+                        cv2.putText(
+                            vis,
+                            label,
+                            (10, 30 + 20 * overlay_rows),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.5,
+                            draw_color,
+                            2,
+                            cv2.LINE_AA,
+                        )
+                        overlay_rows += 1
 
             # Print at ~10 Hz when we have a valid 3D point
             now = time.time()
-            if xyz is not None and (now - last_print_t) > 0.1:
+            if xyz_list and (now - last_print_t) > 0.1:
                 last_print_t = now
-                x, y, z = xyz
-                print(f"marker_xyz_m: {x:.4f} {y:.4f} {z:.4f}")
+                for color_name, i, xyz in xyz_list:
+                    x, y, z = xyz
+                    print(f"{color_name}_{i}_xyz_m: {x:.4f} {y:.4f} {z:.4f}")
 
             if show:
                 cv2.imshow("marker", vis)
                 if args.show_mask:
-                    if mask is None:
-                        cv2.imshow("mask", np.zeros(frame_bgr.shape[:2], dtype=np.uint8))
-                    else:
-                        cv2.imshow("mask", mask)
+                    cv2.imshow("mask_blue", masks["blue"])
+                    cv2.imshow("mask_green", masks["green"])
                 if cv2.waitKey(1) & 0xFF == ord("q"):
                     break
 

@@ -60,3 +60,6 @@ htmlcov/
 
 # Arm sim files
 sim/inmoov/
+
+# Public models
+public/

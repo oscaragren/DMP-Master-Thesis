@@ -139,6 +139,8 @@ def main() -> None:
     q_traj = clamp_dmp_vector(q_traj) # Clamp to joint limits
 
     T, _n = q_traj.shape
+    traj_duration_s = float((T - 1) * dt)
+    print(f"Trajectory duration (simulated): {traj_duration_s:.3f} s  (T={T}, dt={dt:.6f})")
 
     # 2. Connect PyBullet and load standalone arm URDF
     p.connect(p.GUI)
