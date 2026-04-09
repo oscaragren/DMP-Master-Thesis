@@ -139,7 +139,7 @@ def main():
     np.savez(
         trial_dir / "dmp_rollout_raw.npz",
         q_demo=angles,
-        q_gen=q_gen_raw,
+        q_gen=np.rad2deg(q_gen_raw),
         q_gen_rad=q_gen_raw,
         t=t,
         dt=dt,
@@ -149,7 +149,7 @@ def main():
     np.savez(
         trial_dir / "dmp_rollout_clean.npz",
         q_demo=clean_angles,
-        q_gen=q_gen_clean,
+        q_gen=np.rad2deg(q_gen_clean),
         q_gen_rad=q_gen_clean,
         t=t,
         dt=dt_clean,

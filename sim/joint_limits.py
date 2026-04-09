@@ -39,14 +39,13 @@ from typing import Tuple
 
 import numpy as np
 
-
+# Update joint limits
 JOINT_LIMITS_RAD: np.ndarray = np.array(
     [
-        [0.0, 0.52],   # 0: Shoulder Up/Down
-        [0.0, 0.70],   # 1: Shoulder Left/Right
-        [0.0, 1.17],   # 2: Elbow
-        [0.0, 1.57],   # 3: Upper Arm Rotation
-        [-1.57, 1.57], # 4: Lower Arm Rotation
+        [0.0, 1.39],   # 0: Shoulder Up/Down (0 to 80 degrees)
+        [0.0, 0.69],   # 1: Shoulder Left/Right (0 to 40 degrees)
+        [0.0, 1.05],   # 2: Elbow (0 to 60 degrees)
+        [-0.69, 0.69],   # 3: Upper Arm Rotation (-40 to 40 degrees)
     ],
     dtype=float,
 )
