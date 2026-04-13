@@ -11,7 +11,7 @@ def limb_vectors(seq: np.ndarray) -> np.ndarray:
     """
     seq: (T, 4, 3) with [shoulder, elbow, wrist, right_shoulder] in meters
     returns: 
-        u: (T, 3) with elbow -> shoulder vector
+        u: (T, 3) with shoulder -> elbow vector
         v: (T, 3) with elbow -> wrist vector
     """
     S = seq[:, 0, :]
@@ -19,21 +19,18 @@ def limb_vectors(seq: np.ndarray) -> np.ndarray:
     W = seq[:, 2, :]
     return E - S, W - E
 
-
 def _elbow_flexion(seq: np.ndarray) -> np.ndarray:
     """
     Calculate elbow flexion in degrees.
+    0 degrees is when the elbow is fully extended.
+    90 degrees is when the elbow is fully bent.
 
     Note, independent of the trunk frame.
     """
     if seq.ndim != 3 or seq.shape[2] != 3 or seq.shape[1] < 4:
         raise ValueError(f"Expected seq shape (T, N>=4, 3), got {seq.shape}")
 
-    S = np.asarray(seq[:, 0, :], dtype=np.float64) # Shoulder
-    E = np.asarray(seq[:, 1, :], dtype=np.float64) # Elbow
-    W = np.asarray(seq[:, 2, :], dtype=np.float64) # Wrist
-
-    forearm, upper_arm = limb_vectors(seq)
+    upper_arm, forearm = limb_vectors(seq)
     upper_arm_u, upper_arm_n = _normalize_rows(upper_arm)
     forearm_u, forearm_n = _normalize_rows(forearm)
 
@@ -41,36 +38,27 @@ def _elbow_flexion(seq: np.ndarray) -> np.ndarray:
     valid = (upper_arm_n > 1e-8) & (forearm_n > 1e-8)
 
     cosang = np.einsum("ij,ij->i", upper_arm_u[valid], forearm_u[valid]) # Cosine of angle between upper arm and forearm
-    #print(f"Cosang: {cosang}")
-    cosang = np.clip(cosang, -1.0, 1.0)
+    cosang = np.clip(cosang, -1.0, 1.0) # Make sure the cosine is between -1 and 1.
 
-    theta[valid] = np.degrees(np.arccos(cosang))   # angle between segments
-
-    #theta[valid] = 180.0 - internal            # flexion convention
-
-    #print(f"Internal: {internal}")
-    #print(f"Theta: {theta}")
+    theta[valid] = np.degrees(np.arccos(cosang)) # Angle between upper arm and forearm in degrees.
     return theta
 
 def _shoulder_flexion(seq: np.ndarray) -> np.ndarray:
     """
     Calculate shoulder flexion in degrees.
+    0 degrees is when the upper arm is parallel to the trunk frame's Y-axis (negative Y direction).
+    90 degree is when the upper arm is fully extended, reaching forward in positive Z direction in trunk frame.
 
     Note, uses trunk frame.
     """
     if seq.ndim != 3 or seq.shape[2] != 3 or seq.shape[1] < 4:
         raise ValueError(f"Expected seq shape (T, N>=4, 3), got {seq.shape}")
 
-    S = np.asarray(seq[:, 0, :], dtype=np.float64) # Shoulder
-    E = np.asarray(seq[:, 1, :], dtype=np.float64) # Elbow
-    W = np.asarray(seq[:, 2, :], dtype=np.float64) # Wrist
-
     upper_arm, _ = limb_vectors(seq)
 
     # Define rotation matrix from world frame to trunk frame
     R_trunk = _get_trunk_rotation_matrix(seq)
     upper_arm_trunk = np.einsum("tij,tj->ti", R_trunk, upper_arm) # Equivalent to R_trunk.T @ upper_arm (NOTE: maybe other way around)
-    # upper_arm_truck = R_trunk.T @ upper_arm
     
     # Get angle in yz-plane (trunk frame)
     upper_arm_trunk_z = upper_arm_trunk[:, 2]
@@ -81,19 +69,18 @@ def _shoulder_flexion(seq: np.ndarray) -> np.ndarray:
 def _shoulder_abduction(seq: np.ndarray) -> np.ndarray:
     """
     Calculate shoulder abduction in degrees.
+
+    0 degrees is when the upper arm is parallel to the trunk frame's Y-axis (negative Y direction).
+    90 degrees is when the upper arm is fully abducted, reaching to the side parallel to the trunk frame's X-axis (positive X direction).
     """
     if seq.ndim != 3 or seq.shape[2] != 3 or seq.shape[1] < 4:
         raise ValueError(f"Expected seq shape (T, N>=4, 3), got {seq.shape}")
-    S = np.asarray(seq[:, 0, :], dtype=np.float64) # Shoulder
-    E = np.asarray(seq[:, 1, :], dtype=np.float64) # Elbow
-    W = np.asarray(seq[:, 2, :], dtype=np.float64) # Wrist
 
     upper_arm, _ = limb_vectors(seq)
 
     # Define rotation matrix from world frame to trunk frame
     R_trunk = _get_trunk_rotation_matrix(seq)
     upper_arm_trunk = np.einsum("tij,tj->ti", R_trunk, upper_arm) # Equivalent to R_trunk.T @ upper_arm
-    # upper_arm_truck = R_trunk.T @ upper_arm
     
     # Get angle in yz-plane (trunk frame)
     upper_arm_trunk_x = upper_arm_trunk[:, 0]
@@ -104,17 +91,18 @@ def _shoulder_abduction(seq: np.ndarray) -> np.ndarray:
 def _shoulder_lateral_medial_rotation(seq: np.ndarray) -> np.ndarray:
     """
     Calculate shoulder lateral medial rotation in degrees.
-
     This is a proxy for the actual rotation of the shoulder around the humerus.
+
+    0 degrees is when the (elbow-bent 90 degrees) forearm is parallel to the trunk frame's Z-axis (positive Z direction).
+    -90 degrees is when the (elbow-bent 90 degrees) forearm is parallel to the trunk frame's X-axis (positive X direction). Outer/lateral rotation.
+    90 degrees is when the (elbow-bent 90 degrees) forearm is parallel to the trunk frame's X-axis (negative X direction). Inner/medial rotation.
+
     """
     if seq.ndim != 3 or seq.ndim != 3 or seq.shape[1] < 4:
         raise ValueError(f"Expected seq shape (T, N>=4, 3), got {seq.shape}")
 
     T = seq.shape[0]
-    S = np.asarray(seq[:, 0, :], dtype=np.float64) # Shoulder
-    E = np.asarray(seq[:, 1, :], dtype=np.float64) # Elbow
-    W = np.asarray(seq[:, 2, :], dtype=np.float64) # Wrist
-
+    
     # Get upper- and forearm
     upper_arm, forearm = limb_vectors(seq)
 
@@ -182,7 +170,7 @@ def _shoulder_lateral_medial_rotation(seq: np.ndarray) -> np.ndarray:
         & np.all(np.isfinite(p_u), axis=1)
     )
 
-    theta[valid] = np.degrees(np.arctan2(p_u[valid, 2], p_u[valid, 0]))
+    theta[valid] = np.degrees(np.arctan2(-p_u[valid, 0], p_u[valid, 2]))
     return theta
 
 def _get_trunk_rotation_matrix(seq: np.ndarray) -> np.ndarray:
@@ -236,6 +224,7 @@ def get_angles(seq: np.ndarray) -> np.ndarray:
     s_abd = _shoulder_abduction(seq)
     s_lat_med_rot = _shoulder_lateral_medial_rotation(seq)
     e_flex = _elbow_flexion(seq)
-    return np.stack([e_flex, s_flex, s_abd, s_lat_med_rot], axis=1) # Maybe a different order?
+    # Canonical repo order: [elbow_flexion, shoulder_flexion, shoulder_abduction, shoulder_lat/med_rotation]
+    return np.stack([e_flex, s_flex, s_abd, s_lat_med_rot], axis=1)
 
 

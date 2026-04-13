@@ -18,6 +18,7 @@ from vis.plotting import plot_3d_trajectory, plot_angles_single, plot_dmp_single
 from kinematics.simple_kinematics import get_angles
 from dmp.dmp import fit, rollout_simple
 from kinematics.clean_angles import _lowpass_angles
+from mapping.retarget import retarget
 
 def _load_raw_seq_t(trial_dir: Path) -> tuple[np.ndarray, np.ndarray]:
     return np.load(trial_dir / "left_arm_seq_camera.npy"), np.load(trial_dir / "left_arm_t.npy")
@@ -59,7 +60,7 @@ def interpolate_nan(angles: np.ndarray) -> np.ndarray:
 def main():
     
     # Load the data
-    trial_dir = Path("test_data/processed/subject_03/random/trial_003")
+    trial_dir = Path("test_data/processed/subject_03/random/trial_006")
     seq, t = _load_raw_seq_t(trial_dir)
     meta = _load_meta(trial_dir)
 
@@ -80,9 +81,15 @@ def main():
     angles_deg = angles
     clean_angles_deg = clean_angles
 
-    # Convert to radians
+    # Retarget the angles (still in degrees) to the robot range.
+    angles_deg_retarget = retarget(angles_deg)
+    clean_angles_deg_retarget = retarget(clean_angles_deg)
+
+    # Convert to radians (DMP expects radians)
     angles = np.deg2rad(angles_deg)
     clean_angles = np.deg2rad(clean_angles_deg)
+    angles_retarget = np.deg2rad(angles_deg_retarget)
+    clean_angles_retarget = np.deg2rad(clean_angles_deg_retarget)
 
     # Export angles for simulation/analysis
     np.savez(
@@ -121,12 +128,12 @@ def main():
         shoulder_rad=clean_angles[:, 1:4], # shoulder flexion, shoulder abduction, shoulder lateral medial rotation
         t=t,
         meta=meta,
-        title_suffix="raw",
+        title_suffix="clean",
         units="deg",
         out_path=trial_dir / "clean_angles.png"
     )
     
-    # Fit DMP 
+    # Fit DMP (no retargeting)
     dt = 1.0 / (angles.shape[0] - 1)
     model_raw = fit([angles], tau=1.0, dt=dt, n_basis_functions=100, alpha_canonical=4.0, alpha_transformation=25.0, beta_transformation=6.25)
     q_gen_raw = rollout_simple(model_raw, angles[0], angles[-1], tau=1.0, dt=dt)
@@ -134,6 +141,43 @@ def main():
     dt_clean = 1.0 / (clean_angles.shape[0] - 1)
     model_clean = fit([clean_angles], tau=1.0, dt=dt_clean, n_basis_functions=100, alpha_canonical=4.0, alpha_transformation=25.0, beta_transformation=6.25)
     q_gen_clean = rollout_simple(model_clean, clean_angles[0], clean_angles[-1], tau=1.0, dt=dt_clean)
+
+    # Fit DMP (with retargeting)
+    dt_retarget = 1.0 / (angles_retarget.shape[0] - 1)
+    model_raw_retarget = fit(
+        [angles_retarget],
+        tau=1.0,
+        dt=dt_retarget,
+        n_basis_functions=100,
+        alpha_canonical=4.0,
+        alpha_transformation=25.0,
+        beta_transformation=6.25,
+    )
+    q_gen_raw_retarget = rollout_simple(
+        model_raw_retarget,
+        angles_retarget[0],
+        angles_retarget[-1],
+        tau=1.0,
+        dt=dt_retarget,
+    )
+
+    dt_clean_retarget = 1.0 / (clean_angles_retarget.shape[0] - 1)
+    model_clean_retarget = fit(
+        [clean_angles_retarget],
+        tau=1.0,
+        dt=dt_clean_retarget,
+        n_basis_functions=100,
+        alpha_canonical=4.0,
+        alpha_transformation=25.0,
+        beta_transformation=6.25,
+    )
+    q_gen_clean_retarget = rollout_simple(
+        model_clean_retarget,
+        clean_angles_retarget[0],
+        clean_angles_retarget[-1],
+        tau=1.0,
+        dt=dt_clean_retarget,
+    )
 
     # Export rollouts for simulation/analysis
     np.savez(
@@ -174,6 +218,24 @@ def main():
         title_suffix="clean",
         units="deg",
         out_path=trial_dir / "dmp_trajectory_clean.png"
+    )
+
+    plot_dmp_single(
+        q_demo=angles_retarget,
+        q_gen=q_gen_raw_retarget,
+        meta=meta,
+        title_suffix="raw_retarget",
+        units="deg",
+        out_path=trial_dir / "dmp_trajectory_raw_retarget.png",
+    )
+
+    plot_dmp_single(
+        q_demo=clean_angles_retarget,
+        q_gen=q_gen_clean_retarget,
+        meta=meta,
+        title_suffix="clean_retarget",
+        units="deg",
+        out_path=trial_dir / "dmp_trajectory_clean_retarget.png",
     )
 
 

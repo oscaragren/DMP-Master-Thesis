@@ -291,7 +291,7 @@ def plot_dmp_single(
     ylab = _angle_ylabel(units)
     for j in range(4):
         ax = axes[j]
-        ax.plot(t_demo, _angles_in_units(q_demo[:, j], units), color=colors_demo[j], linewidth=1.5, label="Demo (smoothed)")
+        ax.plot(t_demo, _angles_in_units(q_demo[:, j], units), color=colors_demo[j], linewidth=1.5, label="Demo")
         ax.plot(t_gen, _angles_in_units(q_gen[:, j], units), color=colors_gen[j], linestyle="--", linewidth=1.2, label="DMP")
         ax.set_ylabel(ylab)
         ax.set_title(joint_names[j])

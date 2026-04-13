@@ -282,7 +282,8 @@ def get_angles(seq: np.ndarray) -> np.ndarray:
     ab = _shoulder_abduction(seq)
     smr = _shoulder_lateral_medial_rotation(seq)
     ef = _elbow_flexion(seq)
-    return np.stack([sh, ab, smr, ef], axis=1)
+    # Canonical repo order: [elbow_flexion, shoulder_flexion, shoulder_abduction, shoulder_lat/med_rotation]
+    return np.stack([ef, sh, ab, smr], axis=1)
 
     
 

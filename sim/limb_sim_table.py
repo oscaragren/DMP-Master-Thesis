@@ -1,23 +1,17 @@
 """
-Play back a DMP‑generated left‑arm trajectory on the standalone arm model in PyBullet.
+Play back a DMP‑generated left‑arm trajectory on the standalone arm model in PyBullet,
+with a simple table placed in front of the body.
 
-This is analogous to sim/inmoov_sim.py, but loads the URDF in sim/arm/left_arm.urdf
-instead of the full InMoov model.
+This mirrors sim/limb_sim.py, but additionally spawns a static table (a box) whose
+top surface lies at `--table-top-z` in world coordinates.
 
 Usage (from project root):
 
-    python sim/limb_sim.py --subject 1 --motion lift --trial 6
+    python3 sim/limb_sim_table.py --subject 1 --motion lift --trial 6
 
 or:
 
-    python sim/limb_sim.py --path test_data/processed/subject_01/lift/trial_006
-
-The trial directory should contain either:
-- a precomputed rollout `dmp_rollout_{clean|raw}.npz` (preferred), or
-- `angles*.npz` produced by your pipeline (fallback; we re-fit a DMP at runtime),
-with the convention:
-
-    [elbow_flexion, shoulder_flexion, shoulder_abduction, shoulder_internal_rotation] (deg)
+    python3 sim/limb_sim_table.py --path test_data/processed/subject_01/lift/trial_006
 """
 
 from __future__ import annotations
@@ -45,17 +39,43 @@ def joint_index(body_uid: int, joint_name: str) -> int:
     num_joints = p.getNumJoints(body_uid)
     for i in range(num_joints):
         info = p.getJointInfo(body_uid, i)
-        name = info[1].decode("utf-8") if isinstance(info[1], (bytes, bytearray)) else str(
-            info[1]
-        )
+        name = info[1].decode("utf-8") if isinstance(info[1], (bytes, bytearray)) else str(info[1])
         if name == joint_name:
             return i
     raise KeyError(f"Joint not found in URDF: {joint_name}")
 
 
+def _spawn_table(*, pos: list[float], half_extents: list[float], rgba: list[float]) -> int:
+    col_id = p.createCollisionShape(p.GEOM_BOX, halfExtents=half_extents)
+    vis_id = p.createVisualShape(p.GEOM_BOX, halfExtents=half_extents, rgbaColor=rgba)
+    return int(
+        p.createMultiBody(
+            baseMass=0.0,
+            baseCollisionShapeIndex=col_id,
+            baseVisualShapeIndex=vis_id,
+            basePosition=pos,
+            baseOrientation=[0.0, 0.0, 0.0, 1.0],
+        )
+    )
+
+def _disable_collisions_between(body_a: int, body_b: int) -> None:
+    """
+    Disable collisions between all links of body_a and the base link of body_b.
+    (body_b is the table, created as a single-link multibody where the base link index is -1.)
+    """
+    for link_a in range(-1, p.getNumJoints(body_a)):
+        p.setCollisionFilterPair(body_a, body_b, link_a, -1, enableCollision=0)
+
+
+def _link_world_z(body_uid: int, link_index: int) -> float:
+    link_state = p.getLinkState(body_uid, link_index, computeForwardKinematics=True)
+    pos = link_state[0]  # linkWorldPosition
+    return float(pos[2])
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Play back a DMP-generated left-arm trajectory on the standalone arm URDF in PyBullet."
+        description="Play back a DMP-generated left-arm trajectory on the standalone arm URDF in PyBullet (with a table)."
     )
     parser.add_argument(
         "--path",
@@ -104,16 +124,39 @@ def main() -> None:
         default=1.0,
         help="Sign applied to shoulder abduction before offset (use -1 if direction is flipped).",
     )
+
+    # Table placement (defaults: table centered in front of the arm, top at z=0)
+    parser.add_argument("--table-x", type=float, default=0.45, help="Table center X in world coords (m).")
+    parser.add_argument(
+        "--table-y",
+        type=float,
+        default=-0.0,
+        help="Table center Y in world coords (m). (Default is negative because +Y ends up behind the arm with current base orientation.)",
+    )
+    parser.add_argument("--table-top-z", type=float, default=0.0, help="Tabletop world Z (m).")
+    parser.add_argument("--table-length-x", type=float, default=0.9, help="Table length along X (m).")
+    parser.add_argument("--table-depth-y", type=float, default=0.6, help="Table depth along Y (m).")
+    parser.add_argument("--table-height-z", type=float, default=0.7, help="Table height (m).")
+    parser.add_argument(
+        "--table-rgba",
+        type=str,
+        default="1.0,0.0,0.0,0.5",
+        help="RGBA color for the table visual (comma-separated floats).",
+    )
+    parser.add_argument(
+        "--elbow-world-z",
+        type=float,
+        default=0.07,
+        help="Shift the arm base so the elbow joint ends up at this world Z height (m).",
+    )
+
     args = parser.parse_args()
 
     if args.path is not None:
         trial_dir: Path = args.path
     else:
         trial_dir = (
-            args.data_dir
-            / f"subject_{args.subject:02d}"
-            / args.motion
-            / f"trial_{args.trial:03d}"
+            args.data_dir / f"subject_{args.subject:02d}" / args.motion / f"trial_{args.trial:03d}"
         )
     if not trial_dir.exists():
         raise FileNotFoundError(f"Trial directory not found: {trial_dir}")
@@ -136,7 +179,7 @@ def main() -> None:
         basis_functions=args.n_basis,
         filter_order=args.filter_order,
     )  # (T, 4), radians
-    q_traj = clamp_dmp_vector(q_traj) # Clamp to joint limits
+    q_traj = clamp_dmp_vector(q_traj)  # Clamp to joint limits
 
     T, _n = q_traj.shape
     traj_duration_s = float((T - 1) * dt)
@@ -147,23 +190,14 @@ def main() -> None:
     p.setGravity(0, 0, 0)  # kinematic playback
 
     p.setAdditionalSearchPath(str(_sim_dir))
-    urdf_rel = "arm/left_arm.urdf"
+    urdf_rel = "arm/new_left_arm.urdf"
     urdf_path = _sim_dir / urdf_rel
     if not urdf_path.exists():
         p.disconnect()
         raise FileNotFoundError(f"URDF not found: {urdf_path}")
 
-    # Orient the standalone arm so the simulation axes match `convention.md`:
-    #   +X = person's right
-    #   +Y = up
-    #   +Z = forward (out of chest)
-    #
-    # PyBullet's world uses +Z as up, so we rotate the arm base such that the
-    # arm model's +Y aligns with world +Z. With this base orientation, the
-    # "arm down" neutral pose corresponds to the upper-arm pointing along -Y
-    # in the convention frame.
-    base_orn = tuple(float(v) for v in p.getQuaternionFromEuler([math.pi/2.0, 0.0, math.pi/2.0]))
-    #base_orn = p.getQuaternionFromEuler([0.0, 0.0, 0.0])
+    # Same base orientation as sim/limb_sim.py (see that file for rationale).
+    base_orn = tuple(float(v) for v in p.getQuaternionFromEuler([math.pi / 2.0, 0.0, math.pi / 2.0]))
     robot = p.loadURDF(
         urdf_rel,
         basePosition=[0, 0, 0],
@@ -171,34 +205,46 @@ def main() -> None:
         useFixedBase=True,
     )
 
+    # Raise/lower the arm so the elbow joint is at a known height above ground.
+    elbow_roty = joint_index(robot, "jLeftElbow_roty")
+    p.resetJointState(robot, elbow_roty, 0.0)
+    elbow_z0 = _link_world_z(robot, elbow_roty)
+    base_pos0, base_orn0 = p.getBasePositionAndOrientation(robot)
+    dz = float(args.elbow_world_z) - float(elbow_z0)
+    p.resetBasePositionAndOrientation(
+        robot,
+        [float(base_pos0[0]), float(base_pos0[1]), float(base_pos0[2]) + dz],
+        base_orn0,
+    )
+
+    # 2b. Spawn the table in front of the body (in this sim: +Y direction by default).
+    rgba_parts = [s.strip() for s in str(args.table_rgba).split(",") if s.strip() != ""]
+    if len(rgba_parts) != 4:
+        raise ValueError("--table-rgba must contain 4 comma-separated numbers.")
+    table_rgba = [float(x) for x in rgba_parts]
+
+    half_extents = [
+        0.5 * float(args.table_length_x),
+        0.5 * float(args.table_depth_y),
+        0.5 * float(args.table_height_z),
+    ]
+    table_center_z = float(args.table_top_z) - half_extents[2]
+    table_id = _spawn_table(
+        pos=[float(args.table_x), float(args.table_y), table_center_z],
+        half_extents=half_extents,
+        rgba=table_rgba,
+    )
+    _disable_collisions_between(robot, table_id)
+
     print("Loaded arm joints:")
     for j in range(p.getNumJoints(robot)):
         info = p.getJointInfo(robot, j)
         print(j, info[1].decode("utf-8"))
 
-    # 3. Map DMP joints to arm joints
-    #
-    # DMP order (4 DOFs):
-    #   0: elbow_flexion
-    #   1: shoulder_flexion
-    #   2: shoulder_abduction
-    #   3: shoulder_internal_rotation
-    #
-    # Arm URDF joints (left arm, approximate anatomical mapping):
-    # NOTE: For this URDF, rotx/roty appear swapped visually vs our intended anatomy,
-    # so we map flexion -> roty and internal rotation -> rotx.
-    #   jLeftShoulder_rotz  (about Z in arm base frame)  <-- use shoulder_abduction
-    #   jLeftShoulder_roty  (about Y)                   <-- use shoulder_flexion
-    #   jLeftShoulder_rotx  (about X)                   <-- use shoulder_internal_rotation
-    #   jLeftElbow_roty     (about Y)                   <-- use elbow_flexion
-    #
-    # Additional joints (not driven here, but available):
-    #   jLeftElbow_rotz     (forearm rotation)
-    #   jLeftWrist_rotx, jLeftWrist_rotz, finger joints ...
+    # 3. Map DMP joints to arm joints (same mapping as sim/limb_sim.py)
     sh_rotz = joint_index(robot, "jLeftShoulder_rotz")
     sh_rotx = joint_index(robot, "jLeftShoulder_rotx")
     sh_roty = joint_index(robot, "jLeftShoulder_roty")
-    elbow_roty = joint_index(robot, "jLeftElbow_roty")
 
     # Disable motors so resetJointState fully controls pose
     num_joints = p.getNumJoints(robot)
@@ -206,26 +252,23 @@ def main() -> None:
         p.setJointMotorControl2(robot, j, p.POSITION_CONTROL, force=0.0)
 
     print(f"Starting DMP playback on standalone arm from {trial_dir}")
-    #abd_offset = math.radians(float(args.abd_offset_deg))
-    #abd_sign = float(args.abd_sign)
+    abd_offset = math.radians(float(args.abd_offset_deg))
+    abd_sign = float(args.abd_sign)
 
     try:
         while True:
             for t_idx in range(T):
-                # If the GUI window is closed, the physics server disconnects.
-                # Exit cleanly instead of raising "Not connected to physics server".
                 if not p.isConnected():
                     return
                 q_t = q_traj[t_idx]
 
                 elbow = float(q_t[0])
                 sh_flex = float(q_t[1])
-                sh_abd = -float(q_t[2])
+                sh_abd = float(q_t[2])
                 sh_int = float(q_t[3])
 
-                # Simple mapping as described above.
-                #sh_abd_mapped = abd_sign * sh_abd + abd_offset
-                p.resetJointState(robot, sh_rotz, sh_abd)
+                sh_abd_mapped = abd_sign * sh_abd + abd_offset
+                p.resetJointState(robot, sh_rotz, sh_abd_mapped)
                 p.resetJointState(robot, sh_roty, sh_flex)
                 p.resetJointState(robot, sh_rotx, sh_int)
                 p.resetJointState(robot, elbow_roty, elbow)

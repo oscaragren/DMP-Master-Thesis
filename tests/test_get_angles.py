@@ -172,9 +172,9 @@ def main() -> None:
     seq = _make_reach_forward_seq(T=240)
 
     # 2) Compute angles from keypoints
-    ang_deg = get_angles(seq)  # (T,4) => [sh_flex, sh_abd, sh_rot, el_flex] (deg)
+    ang_deg = get_angles(seq)  # (T,4) => [el_flex, sh_flex, sh_abd, sh_rot] (deg)
 
-    # Expected shape: (T, 4) => [shoulder_flex, shoulder_abd, shoulder_rot, elbow_flex]
+    # Expected shape: (T, 4) => [elbow_flex, shoulder_flex, shoulder_abd, shoulder_rot]
     assert ang_deg.shape == (seq.shape[0], 4), f"Unexpected angles shape: {ang_deg.shape}"
     assert np.all(np.isfinite(ang_deg)), "Angles contain NaN/inf for a valid synthetic pose"
 
@@ -183,15 +183,14 @@ def main() -> None:
 
     print("seq shape:", seq.shape)
     print("angles shape:", ang_deg.shape)
-    print("angles [deg] (rows=t, cols=[sh_flex, sh_abd, sh_rot, el_flex]):")
+    print("angles [deg] (rows=t, cols=[el_flex, sh_flex, sh_abd, sh_rot]):")
     np.set_printoptions(precision=3, suppress=True)
     print(ang_deg[:10])
     print("... (showing first 10 frames)")
 
-    # 3) Reorder to limb_sim / DMP joint order and play back in PyBullet
-    # limb_sim expects: [elbow_flexion, shoulder_flexion, shoulder_abduction, shoulder_internal_rotation]
-    q_deg = np.stack([ang_deg[:, 3], ang_deg[:, 0], ang_deg[:, 1], ang_deg[:, 2]], axis=1)
-    q_rad = np.deg2rad(q_deg)
+    # 3) Play back in PyBullet using canonical repo order:
+    #    [elbow_flexion, shoulder_flexion, shoulder_abduction, shoulder_internal_rotation]
+    q_rad = np.deg2rad(ang_deg)
     _play_limb_sim(q_rad, dt=1.0 / 60.0)
 
 
