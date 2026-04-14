@@ -63,3 +63,7 @@ sim/inmoov/
 
 # Public models
 public/
+
+# Invalid joint configurations
+tests/*.csv
+tests/*.txt

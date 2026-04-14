@@ -42,10 +42,10 @@ import numpy as np
 # Update joint limits
 JOINT_LIMITS_RAD: np.ndarray = np.array(
     [
-        [0.0, 1.39],   # 0: Shoulder Up/Down (0 to 80 degrees)
-        [0.0, 0.69],   # 1: Shoulder Left/Right (0 to 40 degrees)
-        [0.0, 1.05],   # 2: Elbow (0 to 60 degrees)
-        [-0.69, 0.69],   # 3: Upper Arm Rotation (-40 to 40 degrees)
+        [0.0, 1.05],     # 0: Elbow flexion (0 to 60 degrees)
+        [0.0, 1.39],     # 1: Shoulder flexion (0 to 80 degrees)
+        [0.0, 0.69],     # 2: Shoulder abduction (0 to 40 degrees)
+        [-0.69, 0.69],   # 3: Shoulder lateral/medial rotation (-40 to 40 degrees)
     ],
     dtype=float,
 )
@@ -59,9 +59,9 @@ class DMPToRobotIndexMapping:
     onto the JOINT_LIMITS_RAD rows.
     """
 
-    elbow: int = 2
-    shoulder_flex: int = 0
-    shoulder_abd: int = 1
+    elbow: int = 0
+    shoulder_flex: int = 1
+    shoulder_abd: int = 2
     shoulder_int_rot: int = 3
 
 
