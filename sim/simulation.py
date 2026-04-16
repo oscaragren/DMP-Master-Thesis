@@ -67,11 +67,10 @@ def main():
     parser.add_argument("--loop", action="store_true", help="Loop playback")
     args = parser.parse_args()
 
-    # 1. Connect and paths (URDF uses "arm/...", so search path = sim so that arm/ = sim/arm/)
+    # 1. Connect and paths (URDF uses "arm/...", so search path = project_root)
     physics_client = pb.connect(pb.GUI)
-    sim_dir = _project_root / "sim"
-    pb.setAdditionalSearchPath(str(sim_dir))
-    urdf_path = sim_dir / "arm" / "left_arm.urdf"
+    pb.setAdditionalSearchPath(str(_project_root))
+    urdf_path = _project_root / "arm" / "left_arm.urdf"
     if not urdf_path.exists():
         pb.disconnect(physics_client)
         raise FileNotFoundError(f"URDF not found: {urdf_path}")
@@ -85,14 +84,14 @@ def main():
         physicsClientId=physics_client,
     )
 
-    # 3. Map our 4 angles to URDF joints; set all 7 arm joints so the chain stays connected
+    # 3. Map our 4 angles to URDF joints; set all arm joints so the chain stays connected
     #    [elbow_flexion, shoulder_elevation, shoulder_azimuth, shoulder_internal_rot]
-    #    -> jLeftElbow_roty, jLeftShoulder_rotz, jLeftShoulder_rotx, jLeftShoulder_roty
+    #    -> jLeftElbow_roty, jLeftShoulder_rotz, jLeftShoulder_rotx, jLeftShoulder_rotz_arm
     controlled_names = [
         "jLeftElbow_roty",
         "jLeftShoulder_rotz",
         "jLeftShoulder_rotx",
-        "jLeftShoulder_roty",
+        "jLeftShoulder_rotz_arm",
     ]
     # Wrist and elbow twist: keep at 0 so arm doesn't drift
     arm_fixed_names = ["jLeftElbow_rotz", "jLeftWrist_rotx", "jLeftWrist_rotz"]

@@ -1,150 +1,138 @@
+#!/usr/bin/env python3
 """
-Play back a DMP-learned joint trajectory on the Franka Panda arm in PyBullet.
+Test script to validate left_arm.urdf
+Verifies:
+  1. Valid XML parsing
+  2. jLeftShoulder_rotz is 'fixed'
+  3. jLeftArm_rotz exists, is 'revolute', axis Z, parent=left_upper_arm, child=left_arm_rotz
+  4. jLeftElbow_roty parent is left_arm_rotz (not left_upper_arm)
+  5. No orphan links / continuous chain to fingers
+"""
 
-We:
-- load a 4-DOF demo (elbow + 3 shoulder DOFs) from angles.npz
-- fit a DMP and rollout a new trajectory in joint space (still 4 DOFs)
-- map these 4 angles to the first four Panda joints and visualize the motion
-"""
-from pathlib import Path
+import xml.etree.ElementTree as ET
 import sys
-import time
+import os
 
-import numpy as np
-import pybullet as p
-import pybullet_data
+# Relative path to arm/ directory
+URDF_FILE = os.path.join(os.path.dirname(__file__), "..", "arm", "left_arm.urdf")
 
-from dmp.dmp import fit, rollout_simple
-from kinematics.joint_dynamics import (
-    smooth_angles_deg,
-    validate_joint_trajectory_deg,
-)
-from vis.plot_dmp_trajectory import load_angles_demo
-
-
-def get_project_root() -> Path:
-    """Return project root (parent of sim/)."""
-    sim_dir = Path(__file__).resolve().parent
-    return sim_dir.parent
-
-
-def load_dmp_trajectory() -> tuple[np.ndarray, float]:
-    """Fit a DMP on a demo from angles.npz and rollout a generated trajectory.
-
-    Returns:
-        q_rad: (T, 4) numpy array, joint angles in radians
-        dt:   timestep used for the rollout (seconds, normalized time)
-    """
-    project_root = get_project_root()
-    # Default trial directory, matching other utilities in this repo
-    trial_dir = project_root / "test_data" / "processed" / "subject_01" / "reach" / "trial_008"
-
-    if not trial_dir.exists():
-        raise FileNotFoundError(
-            f"Trial directory not found: {trial_dir}\n"
-            "Adjust the path in sim/test_sim.py or generate test_data/processed first."
-        )
-
-    # Demo is in degrees (elbow + 3 shoulder angles), shape (T, 4)
-    q_demo_deg = load_angles_demo(trial_dir)
-    # Smooth demonstrated joint angles to suppress sensor noise before fitting.
-    q_demo_deg = smooth_angles_deg(q_demo_deg)
-
-    T, n_joints = q_demo_deg.shape
-    if n_joints != 4:
-        raise ValueError(f"Expected 4-DOF demo, got shape {q_demo_deg.shape}")
-
-    # Normalized duration tau=1.0, match what vis/plot_dmp_trajectory.py uses
-    tau = 1.0
-    dt = tau / (T - 1)
-
-    model = fit(
-        [q_demo_deg],
-        tau=tau,
-        dt=dt,
-        n_basis_functions=15,
-        alpha_canonical=4.0,
-        alpha_transformation=25.0,
-        beta_transformation=6.25,
-    )
-
-    q_gen_deg = rollout_simple(model, q_demo_deg[0], q_demo_deg[-1], tau=tau, dt=dt)
-
-    # Validate generated trajectory (deg) against human‑like limits.
-    #validate_joint_trajectory_deg(q_gen_deg, dt, raise_on_error=True, name="DMP rollout (deg)")
-
-    q_gen_rad = np.deg2rad(q_gen_deg)
-    return q_gen_rad, dt
-
-
-def get_joint_indices_by_name(body_uid: int, names: list[str]) -> list[int]:
-    """Utility to resolve PyBullet joint indices from joint names."""
-    name_to_index: dict[str, int] = {}
-    num_joints = p.getNumJoints(body_uid)
-    for j in range(num_joints):
-        info = p.getJointInfo(body_uid, j)
-        jname = info[1].decode("utf-8") if isinstance(info[1], bytes) else info[1]
-        name_to_index[jname] = j
-
-    indices: list[int] = []
-    for name in names:
-        if name not in name_to_index:
-            raise KeyError(f"Joint {name} not found in URDF. Available: {sorted(name_to_index.keys())}")
-        indices.append(name_to_index[name])
-    return indices
-
-
-def main() -> None:
-    # Ensure project root is on sys.path so imports work if run from elsewhere
-    project_root = get_project_root()
-    if str(project_root) not in sys.path:
-        sys.path.insert(0, str(project_root))
-
-    # 1. Load DMP trajectory once before starting simulation
-    q_traj, dt = load_dmp_trajectory()  # (T, 4), radians
-    T, n_joints = q_traj.shape
-
-    # 2. Start PyBullet GUI and basic world
-    p.connect(p.GUI)
-    p.setAdditionalSearchPath(pybullet_data.getDataPath())
-    p.setGravity(0, 0, 0)  # kinematic playback; no dynamics needed
-
-    plane_id = p.loadURDF("plane.urdf")
-    _ = plane_id  # silence unused variable linter
-
-    robot = p.loadURDF("franka_panda/panda.urdf", useFixedBase=True)
-
-    # 3. Map our 4-DOF trajectory to the first four Panda joints
-    panda_joint_names = ["panda_joint1", "panda_joint2", "panda_joint3", "panda_joint4"]
-    controlled_indices = get_joint_indices_by_name(robot, panda_joint_names)
-    if len(controlled_indices) != n_joints:
-        raise RuntimeError(
-            f"Trajectory has {n_joints} joints but mapped to {len(controlled_indices)} Panda joints."
-        )
-
-    # Disable default motor forces so resetJointState fully controls pose
-    num_joints = p.getNumJoints(robot)
-    for j in range(num_joints):
-        p.setJointMotorControl2(
-            robot,
-            j,
-            p.POSITION_CONTROL,
-            force=0.0,
-        )
-
-    # 4. Playback loop: repeatedly run the generated trajectory
-    print("Starting DMP playback on Franka Panda. Close the GUI window to exit.")
+def parse(file):
     try:
-        while True:
-            for t_idx in range(T):
-                q_t = q_traj[t_idx]
-                for j, joint_index in enumerate(controlled_indices):
-                    p.resetJointState(robot, joint_index, float(q_t[j]))
-                p.stepSimulation()
-                time.sleep(dt)
-    finally:
-        p.disconnect()
+        tree = ET.parse(file)
+        print(f"[OK] XML parsing: {file}")
+        return tree.getroot()
+    except ET.ParseError as e:
+        print(f"[FAIL] XML parsing: {e}")
+        sys.exit(1)
 
+def get_joints(root):
+    return {j.get("name"): j for j in root.findall("joint")}
+
+def get_links(root):
+    return {l.get("name") for l in root.findall("link")}
+
+def check(condition, msg_ok, msg_fail):
+    if condition:
+        print(f"[OK] {msg_ok}")
+    else:
+        print(f"[FAIL] {msg_fail}")
+    return condition
+
+def main():
+    root = parse(URDF_FILE)
+    joints = get_joints(root)
+    links = get_links(root)
+    all_ok = True
+
+    print("\n--- TEST 1: jLeftShoulder_rotz is fixed ---")
+    j = joints.get("jLeftShoulder_rotz")
+    all_ok &= check(j is not None, "joint found", "jLeftShoulder_rotz not found")
+    if j is not None:
+        all_ok &= check(j.get("type") == "fixed",
+                        "type=fixed",
+                        f"type={j.get('type')} (expected: fixed)")
+
+    print("\n--- TEST 2: jLeftArm_rotz exists and is correctly defined ---")
+    j = joints.get("jLeftArm_rotz")
+    all_ok &= check(j is not None, "joint jLeftArm_rotz found", "jLeftArm_rotz NOT FOUND")
+    if j is not None:
+        all_ok &= check(j.get("type") == "revolute",
+                        "type=revolute",
+                        f"type={j.get('type')} (expected: revolute)")
+
+        parent = j.find("parent")
+        all_ok &= check(parent is not None and parent.get("link") == "left_upper_arm",
+                        "parent=left_upper_arm",
+                        f"parent={parent.get('link') if parent is not None else 'None'}")
+
+        child = j.find("child")
+        all_ok &= check(child is not None and child.get("link") == "left_arm_rotz",
+                        "child=left_arm_rotz",
+                        f"child={child.get('link') if child is not None else 'None'}")
+
+        axis = j.find("axis")
+        all_ok &= check(axis is not None and axis.get("xyz") in ("0 0 -1", "0 0 1"),
+                        f"axis Z = {axis.get('xyz') if axis is not None else 'None'}",
+                        f"unexpected axis: {axis.get('xyz') if axis is not None else 'None'}")
+
+        origin = j.find("origin")
+        all_ok &= check(origin is not None and "-0.305" in origin.get("xyz", ""),
+                        f"origin xyz={origin.get('xyz') if origin is not None else 'None'} (contains -0.305)",
+                        f"unexpected origin xyz: {origin.get('xyz') if origin is not None else 'None'}")
+
+    print("\n--- TEST 3: jLeftElbow_roty is connected to left_arm_rotz ---")
+    j = joints.get("jLeftElbow_roty")
+    all_ok &= check(j is not None, "joint found", "jLeftElbow_roty not found")
+    if j is not None:
+        parent = j.find("parent")
+        all_ok &= check(parent is not None and parent.get("link") == "left_arm_rotz",
+                        "parent=left_arm_rotz",
+                        f"parent={parent.get('link') if parent is not None else 'None'} (expected: left_arm_rotz)")
+
+        origin = j.find("origin")
+        all_ok &= check(origin is not None and origin.get("xyz") == "0 0 0",
+                        "origin xyz=0 0 0 (offset absorbed by jLeftArm_rotz)",
+                        f"origin xyz={origin.get('xyz') if origin is not None else 'None'}")
+
+    print("\n--- TEST 4: Complete chain to fingers ---")
+    expected_chain = [
+        ("jLeftShoulder_rotz",      "arm_base_rotated",     "left_shoulder_rotz"),
+        ("jLeftShoulder_rotx",      "left_shoulder_rotz",   "left_shoulder_rotx"),
+        ("jLeftShoulder_roty",      "left_shoulder_rotx",   "left_shoulder_rotz_arm"),
+        ("jLeftShoulder_rotz_arm",  "left_shoulder_rotz_arm", "left_upper_arm"),
+        ("jLeftArm_rotz",           "left_upper_arm",       "left_arm_rotz"),
+        ("jLeftElbow_roty",         "left_arm_rotz",        "left_elbow_roty"),
+        ("jLeftElbow_rotz",         "left_elbow_roty",      "left_forearm"),
+        ("jLeftWrist_rotx",         "left_forearm",         "left_wrist_rotx"),
+        ("jLeftWrist_rotz",         "left_wrist_rotx",      "left_hand"),
+    ]
+    for jname, expected_parent, expected_child in expected_chain:
+        j = joints.get(jname)
+        if j is None:
+            print(f"[FAIL] {jname} not found")
+            all_ok = False
+            continue
+        p = j.find("parent")
+        c = j.find("child")
+        p_ok = p is not None and p.get("link") == expected_parent
+        c_ok = c is not None and c.get("link") == expected_child
+        all_ok &= check(p_ok and c_ok,
+                        f"{jname}: {expected_parent} → {expected_child}",
+                        f"{jname}: expected {expected_parent}→{expected_child}, "
+                        f"found {p.get('link') if p is not None else '?'}→{c.get('link') if c is not None else '?'}")
+
+    print("\n--- TEST 5: link left_arm_rotz exists ---")
+    all_ok &= check("left_arm_rotz" in links,
+                    "left_arm_rotz present in links",
+                    "left_arm_rotz MISSING from links")
+
+    print("\n" + "="*50)
+    if all_ok:
+        print("ALL TESTS PASSED")
+    else:
+        print("SOME TESTS FAILED — see details above")
+    print("="*50)
+    sys.exit(0 if all_ok else 1)
 
 if __name__ == "__main__":
     main()
