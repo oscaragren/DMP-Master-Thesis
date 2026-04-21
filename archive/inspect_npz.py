@@ -54,6 +54,7 @@ def inspect_npz(path: Path, *, preview: int = 8, stats: bool = True) -> None:
 
     data = np.load(path, allow_pickle=False)
     keys = list(data.keys())
+    #print(data["q_gen"])
 
     print(f"File: {path}")
     print(f"Type: .npz")
