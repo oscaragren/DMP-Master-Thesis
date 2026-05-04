@@ -80,7 +80,9 @@ def _save_dmp_model(dmp_model: DMPModel, trial_dir: Path) -> None:
         alpha_canonical=dmp_model.alpha_canonical,
         alpha_transformation=dmp_model.alpha_transformation,
         beta_transformation=dmp_model.beta_transformation,
-        tau=dmp_model.tau
+        tau=dmp_model.tau,
+        n_joints=dmp_model.n_joints,
+        #curvature_weights=dmp_model.curvature_weights
     )
 
 def _save_dmp_rollout(q_gen: np.ndarray, trial_dir: Path, t: np.ndarray, dt: float) -> None:

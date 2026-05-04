@@ -94,6 +94,12 @@ def _save_dmp_rollout(q_gen: np.ndarray, trial_dir: Path, t: np.ndarray, dt: flo
         qT=q_gen[-1],
     )
 
+def _save_curvature_weights(curvature_weights: np.ndarray, trial_dir: Path) -> None:
+    np.savez(
+        trial_dir / "curvature_weights.npz",
+        curvature_weights=curvature_weights
+    )
+
 def _plot_angles(angles: np.ndarray, trial_dir: Path, t: np.ndarray, meta: dict) -> None:
     plot_angles_single(
         elbow_rad=np.deg2rad(angles[:, 0]), # elbow flexion
@@ -116,54 +122,39 @@ def _plot_dmp(angles: np.ndarray, q_gen: np.ndarray, trial_dir: Path, meta: dict
 
 def main():
 
-    # 1) Parse session setups
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--subject", type=int, required=True, help="Subject ID")
-    ap.add_argument("--motion", type=str, required=True, help="Motion type")
-    ap.add_argument("--trial", type=int, required=True, help="Trial number")
-    args = ap.parse_args()
+    for subject in range(1, 10):
+        motion = "move_cup"
+        for trial in range(1, 8):
+
+            # 2) Get the trial directory for input and directory for output
+            session_dir = os.path.join(os.path.dirname(__file__), "data", "raw", f"subject_{subject:02d}", motion)
+            trial_dir = Path(session_dir) / f"trial_{trial:03d}"
+            
+            output_dir = Path("data", "processed", f"subject_{subject:02d}", motion, f"trial_{(trial):03d}")
+            os.makedirs(output_dir, exist_ok=True)
+
+            # 3) Load the data
+            seq, t = _load_raw_seq_t(trial_dir)
+            meta = _load_meta(trial_dir)
+            # 4) Convert the sequence to angles and interpolate NaN values
+            angles = _interpolate_nan(get_angles(seq))
+            # Maybe add low_pass filter here
+            angles = _lowpass_angles(angles, fps=25.0, cutoff_hz=5.0, order=2)
 
 
-    # 2) Get the trial directory for input and directory for output
-    session_dir = os.path.join(os.path.dirname(__file__), "data", "test", f"subject_{args.subject:02d}", args.motion)
-    trial_dir = Path(session_dir) / f"trial_{(args.trial):03d}"
-    
-    output_dir = Path("data", "test", f"subject_{args.subject:02d}", args.motion, f"trial_{(args.trial):03d}")
-    os.makedirs(output_dir, exist_ok=True)
+            # 5) Retarget the angles to the robot range
+            #angles = _retarget_angles(angles) # Trajectory-specific limits
+            #angles = _retarget_angles_global(angles)
+            #angles = _retarget_angles_threshold(angles)
 
-    # 3) Load the data
-    seq, t = _load_raw_seq_t(trial_dir)
-    meta = _load_meta(trial_dir)
-    # 4) Convert the sequence to angles and interpolate NaN values
-    angles = _interpolate_nan(get_angles(seq))
-    # Maybe add low_pass filter here
-    angles = _lowpass_angles(angles, fps=25.0, cutoff_hz=5.0, order=2)
+            
+            # 6) Fit the DMP
+            dt = 1.0 / (angles.shape[0] - 1)
+            dmp_model = _fit_dmp([angles], tau=1.0, dt=dt, n_basis_functions=100, alpha_canonical=4.0, alpha_transformation=25.0, beta_transformation=6.25)
+            #q_gen_2 = _rollout_dmp_with_coupling(dmp_model, angles[0], angles[-1], tau=1.0, dt=dt)
+            #q_gen_2 = _clip_angles(q_gen_2)
 
-
-    # 5) Retarget the angles to the robot range
-    #angles = _retarget_angles(angles) # Trajectory-specific limits
-    #angles = _retarget_angles_global(angles)
-    #angles = _retarget_angles_threshold(angles)
-
-    
-    # 6) Fit the DMP
-    dt = 1.0 / (angles.shape[0] - 1)
-    dmp_model = _fit_dmp([angles], tau=1.0, dt=dt, n_basis_functions=100, alpha_canonical=4.0, alpha_transformation=25.0, beta_transformation=6.25)
-    q_gen = _rollout_dmp(dmp_model, angles[0], angles[-1], tau=1.0, dt=dt)
-    q_gen_2 = _rollout_dmp_with_coupling(dmp_model, angles[0], angles[-1], tau=1.0, dt=dt)
-    q_gen = _clip_angles(q_gen)
-    q_gen_2 = _clip_angles(q_gen_2)
-
-    # 7) Save the angles and DMP trajectory
-    _save_angles(angles, output_dir, t, dt)
-    _save_dmp_model(dmp_model, output_dir)
-    _save_dmp_rollout(q_gen, output_dir, t, dt)
-    _save_dmp_rollout(q_gen_2, output_dir, t, dt)
-    
-    # 8) Plot the angles and DMP trajectory
-    _plot_3d_trajectory(seq, t, meta, output_dir / "sequence.png")
-    _plot_angles(angles, output_dir, t, meta)
-    _plot_dmp(angles, q_gen, output_dir, meta, "dmp")
-    _plot_dmp(angles, q_gen_2, output_dir, meta, "dmp_with_coupling")
+            # 7) Save the curvature weights
+            _save_curvature_weights(dmp_model.curvature_weights, output_dir)
 if __name__ == "__main__":
     main()
