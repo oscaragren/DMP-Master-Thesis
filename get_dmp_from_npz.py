@@ -21,7 +21,7 @@ def export_generated_trajectory(npz_path: Path, *, out_path: Path) -> Path:
     keys = set(data.keys())
 
     # Rollouts in this repo have used both names across time.
-    traj_key = "q_gen" if "q_gen" in keys else ("q_gen_rad" if "q_gen_rad" in keys else None)
+    traj_key = "q_gen_deg" if "q_gen_deg" in keys else ("q_gen_rad" if "q_gen_rad" in keys else None)
     if traj_key is None:
         raise KeyError(f"No generated trajectory found in {npz_path.name}. Keys={sorted(keys)}")
 
@@ -46,8 +46,8 @@ def export_generated_trajectory(npz_path: Path, *, out_path: Path) -> Path:
 
 
 def main() -> None:
-    default_npz = Path("data/processed/subject_10/move_cup/trial_006/dmp_rollout.npz")
-    default_out = Path("data/processed/subject_10/move_cup/trial_006/q_gen.json")
+    default_npz = Path("data/processed/subject_06/move_cup/trial_006/dmp_rollout_base.npz")
+    default_out = Path("data/processed/subject_06/move_cup/trial_006/q_gen_base.json")
 
     parser = argparse.ArgumentParser(
         description="Export the generated DMP trajectory from a rollout .npz to a JSON file."
@@ -70,6 +70,9 @@ def main() -> None:
     out_path = args.out.expanduser().resolve()
     export_generated_trajectory(npz_path, out_path=out_path)
     print(f"Wrote: {out_path}")
+
+    # print numpy array so that i can copy and paste it into the experiment.py file, with 3 decimal places
+    print(np.round(np.load(npz_path)["q_gen_deg"], 3).tolist())
 
 
 if __name__ == "__main__":

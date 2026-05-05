@@ -8,3 +8,5 @@ open3d>=0.17.0
 pybullet
 matplotlib
 tqdm
+pandas
+openpyxl
