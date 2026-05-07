@@ -178,7 +178,7 @@ def lowpass_keypoints(seq: np.ndarray, *, fps: float, cutoff_hz: float = 5.0, or
     s = np.asarray(seq, dtype=float)
     if s.ndim != 3 or s.shape[2] != 3:
         raise ValueError(f"Expected seq shape (T,K,3), got {s.shape}")
-    if s.shape[0] < 5:
+    if s.shape[0] < 10:
         return s.copy()
     nyq = float(fps) * 0.5
     wn = min(float(cutoff_hz) / max(nyq, 1e-9), 0.99)

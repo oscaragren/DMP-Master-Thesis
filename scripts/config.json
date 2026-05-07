@@ -1,0 +1,35 @@
+{
+  "trial_dir": "data/raw/subject_05/move_cup/trial_005",
+  "out_root": "results/dmp_timing",
+
+  "n_iters": 2000,
+  "period_ms": 10.0,
+  "window_size": 15,
+
+  "phase_mode": "progress",
+
+  "coupling_mode": "none",
+  "kp": 25.0,
+  "kd": 10.0,
+  "autonomy_gain": 1.0,
+
+  "comm_mode": "none",
+  "comm_sleep_ms": 0.0,
+
+  "tau": 1.0,
+  "dt": 0.01,
+  "n_basis": 50,
+  "alpha_canonical": 4.0,
+  "alpha_transformation": 25.0,
+  "beta_transformation": 6.25,
+
+  "deadline_e2e_ms": 8.0,
+  "budget_pose_ms": 1.0,
+  "budget_preprocess_ms": 2.0,
+  "budget_angle_ms": 1.0,
+  "budget_phase_ms": 0.5,
+  "budget_dmp_step_ms": 1.0,
+  "budget_coupling_ms": 0.5,
+  "budget_comm_ms": 1.0
+}
+

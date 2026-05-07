@@ -1,6 +1,5 @@
 from re import L
 import numpy as np
-from scipy.spatial.transform import Rotation as R
 
 # Trunk "up" in camera frame (OAK-D: X right, Y down, Z forward → person up = -Y)
 WORLD_UP = np.array([0.0, -1.0, 0.0], dtype=np.float64)
